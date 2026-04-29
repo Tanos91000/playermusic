@@ -18,7 +18,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "emric",
+        "owner": "TanosVape",
         "repo": "playermusic"
       }
     ],
