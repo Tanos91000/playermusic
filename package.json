@@ -2,19 +2,52 @@
   "name": "playermusic",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "concurrently \"vite\" \"wait-on tcp:3005 && electron .\"",
+    "build": "vite build && electron-builder",
+    "start": "electron .",
     "lint": "eslint"
   },
+  "build": {
+    "appId": "com.emric.playermusic",
+    "productName": "Aura Player",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "emric",
+        "repo": "playermusic"
+      }
+    ],
+    "mac": {
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    }
+  },
   "dependencies": {
-    "next": "16.2.4",
+    "@distube/ytdl-core": "^4.16.12",
+    "electron-updater": "^6.8.3",
+    "lucide-react": "^1.14.0",
+    "play-dl": "^1.9.7",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "soundcloud-downloader": "^1.0.0",
+    "youtube-dl-exec": "^3.1.5",
+    "youtube-ext": "^1.1.25",
+    "yt-search": "^2.13.1"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.3.0",
     "eslint": "^9",
-    "eslint-config-next": "16.2.4"
+    "vite": "^8.0.10",
+    "wait-on": "^9.0.5"
   }
 }
