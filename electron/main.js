@@ -80,7 +80,7 @@ function createWindow() {
   });
 
   // Wait for Vite dev server if in dev mode
-  if (process.env.NODE_ENV !== 'production') {
+  if (!app.isPackaged) {
     mainWindow.loadURL('http://localhost:3005');
     mainWindow.webContents.openDevTools();
   } else {
