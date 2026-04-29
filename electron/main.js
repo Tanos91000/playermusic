@@ -54,6 +54,14 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.log('Port 3006 is already in use. Assuming proxy is already running.');
+  } else {
+    console.error('Proxy server error:', e);
+  }
+});
+
 server.listen(3006, () => {
   console.log('Stream proxy server running on port 3006');
 });
