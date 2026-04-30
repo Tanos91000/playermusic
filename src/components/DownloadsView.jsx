@@ -1,4 +1,5 @@
-import { HardDrive, Play, Trash2 } from 'lucide-react';
+import { HardDrive, Trash2 } from 'lucide-react';
+import PlayingIndicator from './PlayingIndicator';
 
 function formatBytes(bytes) {
   if (!bytes) return '0 o';
@@ -21,7 +22,7 @@ function formatDuration(ms) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-export default function DownloadsView({ library, currentTrack, onPlay, onDelete }) {
+export default function DownloadsView({ library, currentTrack, isAudioPlaying = false, onPlay, onDelete }) {
   const tracks = library?.tracks || [];
   const totalBytes = library?.totalBytes || 0;
 
@@ -48,7 +49,7 @@ export default function DownloadsView({ library, currentTrack, onPlay, onDelete 
         </div>
       ) : (
         tracks.map((track, index) => {
-          const isPlaying = currentTrack?.id === track.id;
+          const isCurrentTrack = currentTrack?.id === track.id;
 
           return (
             <div
@@ -61,19 +62,31 @@ export default function DownloadsView({ library, currentTrack, onPlay, onDelete 
                 padding: '12px 20px',
                 cursor: 'pointer',
                 transition: 'all 0.2s ease',
-                backgroundColor: isPlaying ? 'var(--surface-hover)' : 'var(--surface-color)',
-                borderColor: isPlaying ? 'var(--accent-color)' : 'var(--border-color)',
+                backgroundColor: isCurrentTrack ? 'var(--surface-hover)' : 'var(--surface-color)',
+                borderColor: isCurrentTrack ? 'var(--accent-color)' : 'var(--border-color)',
                 animationDelay: `${index * 0.05}s`
               }}
               onMouseEnter={(e) => {
-                if (!isPlaying) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
+                if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
               }}
               onMouseLeave={(e) => {
-                if (!isPlaying) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
+                if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
               }}
             >
-              <div style={{ width: '40px', color: isPlaying ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
-                {isPlaying ? <Play size={20} fill="currentColor" /> : index + 1}
+              <div
+                style={{
+                  width: '40px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: 'var(--accent-color)'
+                }}
+              >
+                {isCurrentTrack ? (
+                  <PlayingIndicator playing={isAudioPlaying} />
+                ) : (
+                  <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{index + 1}</span>
+                )}
               </div>
 
               {track.artwork ? (
@@ -83,7 +96,7 @@ export default function DownloadsView({ library, currentTrack, onPlay, onDelete 
               )}
 
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
-                <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: isPlaying ? 600 : 500, color: isPlaying ? 'var(--accent-color)' : 'var(--text-primary)' }}>
+                <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: isCurrentTrack ? 600 : 500, color: isCurrentTrack ? 'var(--accent-color)' : 'var(--text-primary)' }}>
                   {track.title}
                 </h4>
                 <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>

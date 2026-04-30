@@ -94,6 +94,46 @@ body {
   display: block;
 }
 
+/* Spotify-style equalizer in track lists */
+.playing-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  height: 18px;
+  width: 22px;
+}
+
+.playing-bars__bar {
+  width: 3px;
+  height: 14px;
+  background: var(--accent-color);
+  border-radius: 1px;
+  transform-origin: bottom center;
+  animation: playing-bar-pulse 0.48s ease-in-out infinite alternate;
+}
+
+.playing-bars__bar:nth-child(1) {
+  animation-delay: 0ms;
+}
+
+.playing-bars__bar:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.playing-bars__bar:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+@keyframes playing-bar-pulse {
+  from {
+    transform: scaleY(0.28);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
 /* Utility classes */
 .flex-center {
   display: flex;

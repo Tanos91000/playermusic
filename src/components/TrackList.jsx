@@ -1,7 +1,8 @@
-import { Play, Heart, AlertCircle, Download, Check, Loader2 } from 'lucide-react';
+import { Heart, AlertCircle, Download, Check, Loader2 } from 'lucide-react';
 import { useState } from 'react';
+import PlayingIndicator from './PlayingIndicator';
 
-export default function TrackList({ tracks, onPlay, currentTrack, favorites, toggleFavorite, onTrackDownloaded }) {
+export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded }) {
   const [downloadingIds, setDownloadingIds] = useState(new Set());
 
   if (!tracks || tracks.length === 0) {
@@ -73,7 +74,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '100px' }}>
       {tracks.map((track, index) => {
-        const isPlaying = currentTrack?.id === track.id;
+        const isCurrentTrack = currentTrack?.id === track.id;
         const isFav = (favorites || []).find(f => f.id === track.id);
         const isUnavailable = track.unavailable;
         const isDownloading = downloadingIds.has(track.id);
@@ -178,19 +179,31 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
               padding: '12px 20px',
               cursor: 'pointer',
               transition: 'all 0.2s ease',
-              backgroundColor: isPlaying ? 'var(--surface-hover)' : 'var(--surface-color)',
-              borderColor: isPlaying ? 'var(--accent-color)' : 'var(--border-color)',
+              backgroundColor: isCurrentTrack ? 'var(--surface-hover)' : 'var(--surface-color)',
+              borderColor: isCurrentTrack ? 'var(--accent-color)' : 'var(--border-color)',
               animationDelay: `${index * 0.05}s`
             }}
             onMouseEnter={(e) => {
-              if (!isPlaying) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
+              if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
             }}
             onMouseLeave={(e) => {
-              if (!isPlaying) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
+              if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
             }}
           >
-            <div style={{ width: '40px', color: isPlaying ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
-              {isPlaying ? <Play size={20} fill="currentColor" /> : index + 1}
+            <div
+              style={{
+                width: '40px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--accent-color)'
+              }}
+            >
+              {isCurrentTrack ? (
+                <PlayingIndicator playing={isAudioPlaying} />
+              ) : (
+                <span style={{ color: 'var(--text-secondary)', fontVariantNumeric: 'tabular-nums' }}>{index + 1}</span>
+              )}
             </div>
 
             {track.artwork ? (
@@ -210,8 +223,8 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
                   style={{
                     margin: 0,
                     fontSize: '1rem',
-                    fontWeight: isPlaying ? 600 : 500,
-                    color: isPlaying ? 'var(--accent-color)' : 'var(--text-primary)'
+                    fontWeight: isCurrentTrack ? 600 : 500,
+                    color: isCurrentTrack ? 'var(--accent-color)' : 'var(--text-primary)'
                   }}
                 >
                   {track.title}

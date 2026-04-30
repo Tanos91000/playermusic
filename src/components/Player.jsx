@@ -15,7 +15,22 @@ function createReverbBuffer(audioCtx, duration = 2.5, decay = 2.0) {
   return impulse;
 }
 
-export default function Player({ currentTrack, onNext, onPrev, onError, isMini, toggleMiniPlayer, favorites, toggleFavorite, toggleCover, eqBands, reverb, reverbEnabled, djMode }) {
+export default function Player({
+  currentTrack,
+  onNext,
+  onPrev,
+  onError,
+  isMini,
+  toggleMiniPlayer,
+  favorites,
+  toggleFavorite,
+  toggleCover,
+  eqBands,
+  reverb,
+  reverbEnabled,
+  djMode,
+  onPlaybackChange
+}) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -239,6 +254,10 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
     
     setActiveDeck(newDeck);
   }, [currentTrack]);
+
+  useEffect(() => {
+    onPlaybackChange?.(isPlaying);
+  }, [isPlaying, onPlaybackChange]);
 
   const togglePlay = () => togglePlayRef.current();
 

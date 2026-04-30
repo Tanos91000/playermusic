@@ -62,6 +62,7 @@ export default function App() {
   }, []);
 
   const [currentTrack, setCurrentTrack] = useState(null);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playlistContext, setPlaylistContext] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [isLoading, setIsLoading] = useState(false);
@@ -342,6 +343,7 @@ export default function App() {
                 <DownloadsView
                   library={downloadsLibrary}
                   currentTrack={currentTrack}
+                  isAudioPlaying={isAudioPlaying}
                   onPlay={(track, index) => playTrack(track, index, downloadsLibrary.tracks)}
                   onDelete={handleDeleteDownloadedTrack}
                 />
@@ -351,6 +353,7 @@ export default function App() {
                 tracks={currentList} 
                 onPlay={(track, index) => playTrack(track, index, currentList)} 
                 currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
                 favorites={favorites}
                 toggleFavorite={toggleFavorite}
                 onTrackDownloaded={handleTrackDownloaded}
@@ -396,6 +399,7 @@ export default function App() {
         reverb={reverb}
         reverbEnabled={reverbEnabled}
         djMode={djMode}
+        onPlaybackChange={setIsAudioPlaying}
       />
     </div>
   );
