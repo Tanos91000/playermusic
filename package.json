@@ -1,6 +1,6 @@
 {
   "name": "playermusic",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -34,7 +34,6 @@
     }
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
     "electron-updater": "^6.8.3",
     "lucide-react": "^1.14.0",
     "play-dl": "^1.9.7",
@@ -43,7 +42,8 @@
     "soundcloud-downloader": "^1.0.0",
     "youtube-dl-exec": "^3.1.5",
     "youtube-ext": "^1.1.25",
-    "yt-search": "^2.13.1"
+    "yt-search": "^2.13.1",
+    "ytdl-core": "^4.11.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.1",

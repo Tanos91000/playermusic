@@ -6,7 +6,8 @@ const fs = require('fs');
 const scdl = require('soundcloud-downloader').default;
 const { autoUpdater } = require('electron-updater');
 const yts = require('yt-search');
-const ytdl = require('@distube/ytdl-core');
+const ytdl = require('ytdl-core');
+const play = require('play-dl');
 
 let mainWindow;
 const downloadsDir = path.join(app.getPath('userData'), 'downloads');
@@ -202,7 +203,6 @@ ipcMain.handle('download-track', async (event, track) => {
     const fileName = `${track.id}.mp3`;
     const filePath = path.join(downloadsDir, fileName);
 
-    // If file already exists, just return it
     if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1024) {
       const downloads = getDownloads();
       downloads[track.id] = filePath;
@@ -210,21 +210,12 @@ ipcMain.handle('download-track', async (event, track) => {
       return { success: true, localPath: filePath };
     }
 
-    const stream = ytdl(video.url, { 
-      quality: 'highestaudio', 
-      filter: 'audioonly',
-      // Adding some headers can help with ytdl-core stability
-      requestOptions: {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-      }
-    });
-
+    // Using play-dl which is currently much more stable than ytdl-core
+    const stream = await play.stream(video.url, { quality: 2 }); // highestaudio equivalent
     const fileStream = fs.createWriteStream(filePath);
 
     return new Promise((resolve, reject) => {
-      stream.pipe(fileStream);
+      stream.stream.pipe(fileStream);
       
       let hasError = false;
       fileStream.on('finish', () => {
@@ -241,12 +232,12 @@ ipcMain.handle('download-track', async (event, track) => {
         if (hasError) return;
         hasError = true;
         console.error('Stream/File error:', err);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath); // Clean up partial file
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
         reject(err);
       };
 
       fileStream.on('error', handleError);
-      stream.on('error', handleError);
+      stream.stream.on('error', handleError);
     });
   } catch (error) {
     console.error('Download error:', error);
