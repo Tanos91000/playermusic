@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   downloadTrack: (track) => ipcRenderer.invoke('download-track', track),
   getDownloadedTracks: () => ipcRenderer.invoke('get-downloaded-tracks'),
+  getDownloadLibrary: () => ipcRenderer.invoke('get-download-library'),
+  deleteDownloadedTrack: (trackId) => ipcRenderer.invoke('delete-downloaded-track', trackId),
   onUpdateAvailable: (callback) => {
     ipcRenderer.removeAllListeners('update-available');
     ipcRenderer.on('update-available', callback);

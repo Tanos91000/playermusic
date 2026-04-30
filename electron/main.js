@@ -3,17 +3,36 @@ const path = require('path');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const os = require('os');
 const scdl = require('soundcloud-downloader').default;
 const { autoUpdater } = require('electron-updater');
-const yts = require('yt-search');
-const ytdl = require('ytdl-core');
-const play = require('play-dl');
+const { createDownloadTrackHandler, createYoutubeDlUnpack, resolveYtDlpBinaryPath, ensureDownloadBinariesExecutable } = require('./download-track');
+const {
+  deleteDownloadedTrack,
+  getDownloadPath,
+  getDownloadedTracksLibrary
+} = require('./downloads-library');
+
+const youtubeDl = createYoutubeDlUnpack(path);
 
 let mainWindow;
 const downloadsDir = path.join(app.getPath('userData'), 'downloads');
 const downloadsFile = path.join(app.getPath('userData'), 'downloads.json');
 
 if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+function getAudioContentType(filePath) {
+  switch (path.extname(filePath).toLowerCase()) {
+    case '.m4a':
+    case '.mp4':
+      return 'audio/mp4';
+    case '.webm':
+      return 'audio/webm';
+    case '.mp3':
+    default:
+      return 'audio/mpeg';
+  }
+}
 
 function getDownloads() {
   if (!fs.existsSync(downloadsFile)) return {};
@@ -42,7 +61,7 @@ const server = http.createServer(async (req, res) => {
     const filePath = decodedUrl.replace('file://', '');
     if (fs.existsSync(filePath)) {
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Type', getAudioContentType(filePath));
       const stats = fs.statSync(filePath);
       res.setHeader('Content-Length', stats.size);
       return fs.createReadStream(filePath).pipe(res);
@@ -98,10 +117,6 @@ server.on('error', (e) => {
   }
 });
 
-server.listen(3006, () => {
-  console.log('Stream proxy server running on port 3006');
-});
-
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -115,9 +130,21 @@ function createWindow() {
     },
   });
 
-  // Wait for Vite dev server if in dev mode
+  // Dev: use 127.0.0.1 so it matches Vite (localhost → IPv6-only mismatch causes endless load on some macOS setups)
   if (!app.isPackaged) {
-    mainWindow.loadURL('http://localhost:3005');
+    const devUrl = 'http://127.0.0.1:3005';
+    let attempts = 0;
+    const loadDev = () => {
+      attempts += 1;
+      mainWindow.loadURL(devUrl).catch(() => {
+        if (attempts < 80) setTimeout(loadDev, 250);
+      });
+    };
+    mainWindow.webContents.on('did-fail-load', (_event, code, _desc, failedUrl) => {
+      if (failedUrl !== devUrl || attempts >= 80) return;
+      if (code === -102 || code === -105 || code === -106 || code === -7) setTimeout(loadDev, 300);
+    });
+    loadDev();
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
@@ -125,10 +152,25 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  ensureDownloadBinariesExecutable(fs, path);
+  const ytBin = resolveYtDlpBinaryPath(path);
+  if (fs.existsSync(ytBin)) {
+    console.log('[Aura] yt-dlp:', ytBin);
+  } else {
+    console.error('[Aura] yt-dlp absent — téléchargements impossibles:', ytBin);
+  }
+
+  // Start the proxy server
+  server.listen(3006, () => {
+    console.log('Stream proxy server running on port 3006');
+  });
+
   createWindow();
   
-  // Check for updates
-  autoUpdater.checkForUpdatesAndNotify();
+  // Check for updates after a delay to ensure fast startup
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify();
+  }, 5000);
 
   autoUpdater.on('update-available', (info) => {
     if (mainWindow) mainWindow.webContents.send('update-available', info);
@@ -173,7 +215,7 @@ ipcMain.handle('search-soundcloud', async (event, query) => {
     return searchResults.collection
       .map(track => {
         const isUnavailable = track.policy === 'BLOCK' || track.policy === 'SNIP';
-        const localPath = downloads[track.id];
+        const localPath = getDownloadPath(downloads, track.id);
         return {
           id: track.id,
           title: track.title,
@@ -192,71 +234,67 @@ ipcMain.handle('search-soundcloud', async (event, query) => {
   }
 });
 
+function serializeIpcError(err) {
+  if (err == null) return 'Erreur sans détail (valeur absente).';
+  if (typeof err === 'string') return err.slice(0, 4000);
+  const chunks = [];
+  const msg = err.message && String(err.message).trim();
+  if (msg) chunks.push(msg);
+  if (typeof err.stderr === 'string' && err.stderr.trim()) chunks.push(err.stderr.trim());
+  if (typeof err.stdout === 'string' && err.stdout.trim()) chunks.push(err.stdout.trim());
+  if (err.code) chunks.push(`code: ${err.code}`);
+  if (err.errno != null) chunks.push(`errno: ${err.errno}`);
+  if (err.exitCode != null) chunks.push(`exitCode: ${err.exitCode}`);
+  if (err.signal) chunks.push(`signal: ${err.signal}`);
+  if (err.command) chunks.push(`commande: ${err.command}`);
+  const stack = err.stack && String(err.stack).trim();
+  if (stack && chunks.length < 2) {
+    chunks.push(stack.split('\n').slice(0, 12).join('\n'));
+  }
+  const text = chunks.filter(Boolean).join('\n\n').trim();
+  return text ? text.slice(0, 4000) : `Erreur (${typeof err}): ${String(err)}`.slice(0, 4000);
+}
+
+const downloadTrackHandler = createDownloadTrackHandler({
+  downloadsDir,
+  fs,
+  path,
+  os,
+  getDownloads,
+  saveDownloads,
+  youtubeDl
+});
+
 ipcMain.handle('download-track', async (event, track) => {
   try {
-    console.log(`Starting download for: ${track.artist} - ${track.title}`);
-    const query = `${track.artist} - ${track.title}`;
-    
-    // Using play.search for better compatibility with play.stream
-    const searchResults = await play.search(query, { limit: 1, source: { youtube: 'video' } });
-    const video = searchResults[0];
-    
-    if (!video || !video.url) {
-      console.error('No YouTube match found for:', query);
-      throw new Error('No match found on YouTube');
-    }
-
-    console.log(`Found YouTube video: ${video.title} (${video.url})`);
-
-    const fileName = `${track.id}.mp3`;
-    const filePath = path.join(downloadsDir, fileName);
-
-    if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1024) {
-      console.log('File already exists, skipping download');
-      const downloads = getDownloads();
-      downloads[track.id] = filePath;
-      saveDownloads(downloads);
-      return { success: true, localPath: filePath };
-    }
-
-    const stream = await play.stream(video.url, { quality: 2 });
-    const fileStream = fs.createWriteStream(filePath);
-
-    return new Promise((resolve, reject) => {
-      stream.stream.pipe(fileStream);
-      
-      let hasError = false;
-      fileStream.on('finish', () => {
-        if (!hasError) {
-          console.log(`Download finished: ${filePath}`);
-          const downloads = getDownloads();
-          downloads[track.id] = filePath;
-          saveDownloads(downloads);
-          resolve({ success: true, localPath: filePath });
-        }
-      });
-
-      const handleError = (err) => {
-        if (hasError) return;
-        hasError = true;
-        console.error('Download stream error:', err);
-        if (fs.existsSync(filePath)) {
-          try { fs.unlinkSync(filePath); } catch(e) {}
-        }
-        reject(err);
-      };
-
-      fileStream.on('error', handleError);
-      stream.stream.on('error', handleError);
-    });
-  } catch (error) {
-    console.error('Download error handler:', error);
-    throw error;
+    return await downloadTrackHandler(event, track);
+  } catch (err) {
+    console.error('download-track IPC:', err);
+    return {
+      success: false,
+      localPath: null,
+      error: serializeIpcError(err)
+    };
   }
 });
 
 ipcMain.handle('get-downloaded-tracks', () => {
-  return getDownloads();
+  const downloads = getDownloads();
+  return Object.fromEntries(
+    Object.keys(downloads)
+      .map(id => [id, getDownloadPath(downloads, id)])
+      .filter(([, localPath]) => !!localPath)
+  );
+});
+
+ipcMain.handle('get-download-library', () => {
+  return getDownloadedTracksLibrary(getDownloads(), fs, downloadsDir);
+});
+
+ipcMain.handle('delete-downloaded-track', (_event, trackId) => {
+  const result = deleteDownloadedTrack(getDownloads(), trackId, fs);
+  saveDownloads(result.downloads);
+  return getDownloadedTracksLibrary(result.downloads, fs, downloadsDir);
 });
 
 ipcMain.handle('get-app-version', () => {

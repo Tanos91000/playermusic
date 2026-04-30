@@ -76,6 +76,24 @@ body {
   animation: fade-in 0.5s ease-out forwards;
 }
 
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-spin {
+  animation: spin 0.85s linear infinite;
+  transform-origin: center;
+}
+
+.animate-spin svg {
+  display: block;
+}
+
 /* Utility classes */
 .flex-center {
   display: flex;

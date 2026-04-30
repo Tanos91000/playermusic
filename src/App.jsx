@@ -1,9 +1,17 @@
 import { useState, useEffect } from 'react';
-import { Search, Heart, X, Minimize2, Settings as SettingsIcon } from 'lucide-react';
+import { Search, Heart, X, Download as DownloadIcon, Settings as SettingsIcon } from 'lucide-react';
 import Player from './components/Player';
 import TrackList from './components/TrackList';
 import Settings from './components/Settings';
 import AnimatedBackground from './components/AnimatedBackground';
+import DownloadsView from './components/DownloadsView';
+
+const emptyDownloadsLibrary = {
+  downloadsDir: '',
+  tracks: [],
+  count: 0,
+  totalBytes: 0
+};
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('Drake');
@@ -15,6 +23,23 @@ export default function App() {
   const [reverbEnabled, setReverbEnabled] = useState(false);
   const [djMode, setDjMode] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null); // 'available', 'downloaded', null
+  const [downloadsLibrary, setDownloadsLibrary] = useState(emptyDownloadsLibrary);
+  const [downloadsLoading, setDownloadsLoading] = useState(false);
+
+  const loadDownloadedLibrary = async () => {
+    if (!window.electronAPI?.getDownloadLibrary) return;
+
+    setDownloadsLoading(true);
+    try {
+      const library = await window.electronAPI.getDownloadLibrary();
+      setDownloadsLibrary(library || emptyDownloadsLibrary);
+    } catch (error) {
+      console.error('Failed to load downloads library', error);
+      setDownloadsLibrary(emptyDownloadsLibrary);
+    } finally {
+      setDownloadsLoading(false);
+    }
+  };
 
   const refreshFavoritesWithDownloads = async (favs) => {
     try {
@@ -67,6 +92,7 @@ export default function App() {
     if (savedDjMode) setDjMode(savedDjMode === 'true');
     
     handleSearch();
+    loadDownloadedLibrary();
   }, []);
 
   const handleEqChange = (bands) => {
@@ -130,6 +156,70 @@ export default function App() {
     if (!isMiniPlayer) setShowLargeCover(true);
   };
 
+  const markTrackDownloaded = (track, localPath) => ({
+    ...track,
+    unavailable: false,
+    isFixed: true,
+    localPath
+  });
+
+  const clearTrackDownload = (track, deletedTrack) => {
+    if (track.id !== deletedTrack.id) return track;
+
+    return {
+      ...track,
+      localPath: null,
+      isFixed: false,
+      unavailable: !!deletedTrack.sourceUnavailable
+    };
+  };
+
+  const handleTrackDownloaded = (track, result) => {
+    const updateTrack = (item) => item.id === track.id ? markTrackDownloaded(item, result.localPath) : item;
+
+    setTracks(prev => prev.map(updateTrack));
+    setFavorites(prev => {
+      const next = prev.map(updateTrack);
+      localStorage.setItem('aura_favorites', JSON.stringify(next));
+      return next;
+    });
+    setPlaylistContext(prev => prev.map(updateTrack));
+    if (currentTrack?.id === track.id) {
+      setCurrentTrack(prev => prev ? markTrackDownloaded(prev, result.localPath) : prev);
+    }
+    loadDownloadedLibrary();
+  };
+
+  const handleDeleteDownloadedTrack = async (track) => {
+    const confirmed = window.confirm(`Supprimer "${track.title}" des téléchargements ?`);
+    if (!confirmed) return;
+
+    try {
+      const library = await window.electronAPI.deleteDownloadedTrack(track.id);
+      setDownloadsLibrary(library || emptyDownloadsLibrary);
+
+      setTracks(prev => prev.map(item => clearTrackDownload(item, track)));
+      setFavorites(prev => {
+        const next = prev.map(item => clearTrackDownload(item, track));
+        localStorage.setItem('aura_favorites', JSON.stringify(next));
+        return next;
+      });
+      setPlaylistContext(prev => (
+        activeTab === 'downloads'
+          ? prev.filter(item => item.id !== track.id)
+          : prev.map(item => clearTrackDownload(item, track))
+      ));
+
+      if (currentTrack?.id === track.id) {
+        setCurrentTrack(null);
+        setCurrentIndex(-1);
+      }
+    } catch (error) {
+      console.error('Failed to delete downloaded track', error);
+      alert('Erreur lors de la suppression du téléchargement.');
+    }
+  };
+
   const playNext = () => {
     if (currentIndex < playlistContext.length - 1) {
       const nextIndex = currentIndex + 1;
@@ -164,9 +254,11 @@ export default function App() {
     }
   };
 
-  const currentList = activeTab === 'search' 
-    ? tracks 
-    : favorites.filter(t => {
+  const currentList = activeTab === 'search'
+    ? tracks
+    : activeTab === 'downloads'
+      ? downloadsLibrary.tracks
+      : favorites.filter(t => {
         if (!favoritesSearch) return true;
         const search = favoritesSearch.toLowerCase();
         const titleMatch = t.title ? t.title.toLowerCase().includes(search) : false;
@@ -189,6 +281,7 @@ export default function App() {
               <div style={{ display: 'flex', gap: '20px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
                 <button onClick={() => setActiveTab('search')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'search' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'search' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s' }}>Recherche</button>
                 <button onClick={() => setActiveTab('favorites')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'favorites' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'favorites' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s' }}>Favoris</button>
+                <button onClick={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'downloads' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'downloads' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s', display: 'flex', alignItems: 'center', gap: '5px' }}><DownloadIcon size={16} /> Téléchargés</button>
                 <button onClick={() => setActiveTab('settings')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'settings' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s', display: 'flex', alignItems: 'center', gap: '5px' }}><SettingsIcon size={16} /> Paramètres</button>
               </div>
             </div>
@@ -240,6 +333,19 @@ export default function App() {
               <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
                 <p>Recherche en cours...</p>
               </div>
+            ) : activeTab === 'downloads' ? (
+              downloadsLoading ? (
+                <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
+                  <p>Chargement...</p>
+                </div>
+              ) : (
+                <DownloadsView
+                  library={downloadsLibrary}
+                  currentTrack={currentTrack}
+                  onPlay={(track, index) => playTrack(track, index, downloadsLibrary.tracks)}
+                  onDelete={handleDeleteDownloadedTrack}
+                />
+              )
             ) : (
               <TrackList 
                 tracks={currentList} 
@@ -247,6 +353,7 @@ export default function App() {
                 currentTrack={currentTrack}
                 favorites={favorites}
                 toggleFavorite={toggleFavorite}
+                onTrackDownloaded={handleTrackDownloaded}
               />
             )}
           </main>

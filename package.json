@@ -4,8 +4,13 @@
   "private": true,
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"vite\" \"wait-on tcp:3005 && electron .\"",
-    "build": "vite build && electron-builder",
+    "ensure:ytdlp": "node scripts/ensure-ytdlp-standalone.js",
+    "postinstall": "node scripts/ensure-ytdlp-standalone.js",
+    "dev": "concurrently -k \"vite\" \"sh scripts/electron-when-vite-ready.sh\"",
+    "build": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder",
+    "build:mac": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron + DMG — analyse node_modules puis packaging, souvent sans nouveau log pendant des minutes.\\n')\" && node -e \"require('node:fs').rmSync('dist-electron',{recursive:true,force:true});\" && cross-env CI=true CSC_IDENTITY_AUTO_DISCOVERY=false DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --mac --publish never",
+    "build:win": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --win --publish never",
+    "publish:github": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --publish always",
     "start": "electron .",
     "lint": "eslint"
   },
@@ -15,6 +20,20 @@
     "directories": {
       "output": "dist-electron"
     },
+    "npmRebuild": false,
+    "files": [
+      "dist/**/*",
+      "electron/**/*.js",
+      "electron/vendor/**",
+      "!electron/**/*.test.js",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "electron/vendor/**",
+      "node_modules/youtube-dl-exec/bin/**",
+      "node_modules/ffmpeg-static/**",
+      "node_modules/ffprobe-static/**"
+    ],
     "publish": [
       {
         "provider": "github",
@@ -23,6 +42,7 @@
       }
     ],
     "mac": {
+      "identity": null,
       "target": [
         "dmg"
       ]
@@ -35,24 +55,27 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.3",
-    "lucide-react": "^1.14.0",
-    "play-dl": "^1.9.7",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
+    "ffmpeg-static": "^5.2.0",
+    "ffprobe-static": "^3.1.0",
     "soundcloud-downloader": "^1.0.0",
-    "youtube-dl-exec": "^3.1.5",
-    "youtube-ext": "^1.1.25",
-    "yt-search": "^2.13.1",
-    "ytdl-core": "^4.11.5"
+    "youtube-dl-exec": "^3.1.5"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@vitejs/plugin-react": "^6.0.1",
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",
     "electron": "^41.3.0",
     "electron-builder": "^26.8.1",
     "eslint": "^9",
+    "globals": "^14.0.0",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "vite": "^8.0.10",
     "wait-on": "^9.0.5"
+  },
+  "overrides": {
+    "debug": "4.4.3"
   }
 }

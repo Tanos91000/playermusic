@@ -175,7 +175,19 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
   }, []); 
 
   useEffect(() => {
-    if (!currentTrack || !audioCtxRef.current) return;
+    if (!currentTrack) {
+      [audioARef.current, audioBRef.current].forEach((audio) => {
+        if (!audio) return;
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      });
+      setIsPlaying(false);
+      setProgress(0);
+      return;
+    }
+
+    if (!audioCtxRef.current) return;
     
     setIsPlaying(true);
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
@@ -183,8 +195,8 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
     // Use localPath if available, otherwise SoundCloud proxy
     // Ensure the URL is correctly formed for the proxy
     const finalUrl = currentTrack.localPath 
-      ? `http://localhost:3006/?url=${encodeURIComponent('file://' + currentTrack.localPath)}`
-      : `http://localhost:3006/?url=${encodeURIComponent(currentTrack.url)}`;
+      ? `http://127.0.0.1:3006/?url=${encodeURIComponent('file://' + currentTrack.localPath)}`
+      : `http://127.0.0.1:3006/?url=${encodeURIComponent(currentTrack.url)}`;
 
     const streamUrl = finalUrl;
     const newDeck = activeDeck === 'A' ? 'B' : 'A';
