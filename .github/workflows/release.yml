@@ -51,6 +51,12 @@ jobs:
         env:
           YOUTUBE_DL_SKIP_DOWNLOAD: '1'
 
+      - name: Private repo — embed updater token for electron-updater
+        shell: bash
+        env:
+          ELECTRON_UPDATER_GITHUB_TOKEN: ${{ secrets.ELECTRON_UPDATER_GITHUB_TOKEN }}
+        run: node scripts/inject-updater-token.js
+
       - name: Publish to GitHub Releases
         run: npm run ${{ matrix.npm_script }}
         env:
