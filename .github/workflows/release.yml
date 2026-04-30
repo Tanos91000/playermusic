@@ -28,6 +28,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Align tag with package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VER="${GITHUB_REF#refs/tags/v}"
+          PKG_VER=$(node -p "require('./package.json').version")
+          echo "Git tag: v${TAG_VER} — package.json: ${PKG_VER}"
+          if [ "$TAG_VER" != "$PKG_VER" ]; then
+            echo "::error::Le tag v${TAG_VER} ne correspond pas à \"version\" dans package.json (${PKG_VER}). Corrige puis repousse un tag."
+            exit 1
+          fi
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
