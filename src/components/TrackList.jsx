@@ -1,8 +1,11 @@
 import { Heart, AlertCircle, Download, Check, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import PlayingIndicator from './PlayingIndicator';
+import { TrackArtPlaceholder } from './MediaPlaceholder';
+import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
+import { formatStreamCount } from '../utils/formatPlayback';
 
-export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded }) {
+export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded, onOpenArtist }) {
   const [downloadingIds, setDownloadingIds] = useState(new Set());
 
   if (!tracks || tracks.length === 0) {
@@ -54,6 +57,10 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
     return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
   };
 
+  const streamLabel = (playbackCount) => {
+    const s = formatStreamCount(playbackCount);
+    return s == null ? null : `${s} lectures`;
+  };
   const downloadBtnStyle = (isUnavailable, isDownloading, accentUnavailable) => ({
     background: isDownloading ? 'rgba(255,255,255,0.06)' : accentUnavailable ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)',
     color: 'white',
@@ -79,6 +86,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
         const isUnavailable = track.unavailable;
         const isDownloading = downloadingIds.has(track.id);
         const isFixed = track.isFixed;
+        const canOpenArtist = typeof onOpenArtist === 'function' && !!resolveArtistPermalinkUrl(track);
 
         if (isUnavailable) {
           return (
@@ -118,22 +126,57 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                     }}
                   />
                 ) : (
-                  <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.06)' }} />
+                  <TrackArtPlaceholder
+                    size={48}
+                    radius={4}
+                    style={{
+                      marginRight: '15px',
+                      filter: 'grayscale(1) brightness(0.75)',
+                      opacity: 0.85
+                    }}
+                  />
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: 500, color: '#a1a1aa' }}>
                     {track.title}
                   </h4>
                   <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: '#71717a' }}>
-                    {track.artist}
+                    {onOpenArtist && canOpenArtist ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenArtist(track);
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          padding: 0,
+                          cursor: 'pointer',
+                          color: 'inherit',
+                          font: 'inherit'
+                        }}
+                      >
+                        {track.artist}
+                      </button>
+                    ) : (
+                      track.artist
+                    )}
                   </p>
                   <span style={{ fontSize: '0.72rem', color: '#52525b', marginTop: '4px', display: 'inline-block' }}>
                     Non disponible sur SoundCloud — récupère une copie locale
                   </span>
                 </div>
-                <span style={{ color: '#52525b', fontSize: '0.85rem', flexShrink: 0 }}>
-                  {formatDuration(track.duration)}
-                </span>
+                <div style={{ flexShrink: 0, textAlign: 'right', minWidth: '76px' }}>
+                  <div style={{ color: '#52525b', fontSize: '0.85rem', fontVariantNumeric: 'tabular-nums' }}>
+                    {formatDuration(track.duration)}
+                  </div>
+                  {streamLabel(track.playbackCount) != null ? (
+                    <div style={{ fontSize: '0.72rem', color: '#71717a', marginTop: '3px' }} title="Lectures SoundCloud">
+                      {streamLabel(track.playbackCount)}
+                    </div>
+                  ) : null}
+                </div>
               </div>
 
               <div
@@ -213,7 +256,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', marginRight: '15px' }}
               />
             ) : (
-              <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.1)', marginRight: '15px' }} />
+              <TrackArtPlaceholder size={48} radius={4} style={{ marginRight: '15px' }} />
             )}
 
             <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -232,7 +275,30 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 {isFixed && <Check size={14} color="var(--accent-color)" />}
               </div>
               <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {track.artist}
+                {onOpenArtist && canOpenArtist ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenArtist(track);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary)',
+                      font: 'inherit',
+                      textAlign: 'left',
+                      maxWidth: '100%'
+                    }}
+                    className="truncate"
+                  >
+                    {track.artist}
+                  </button>
+                ) : (
+                  track.artist
+                )}
               </p>
             </div>
 
@@ -272,8 +338,15 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 <Heart size={20} fill={isFav ? 'currentColor' : 'none'} />
               </button>
 
-              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', width: '50px', textAlign: 'right' }}>
-                {formatDuration(track.duration)}
+              <div style={{ flexShrink: 0, textAlign: 'right', minWidth: '76px' }}>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', fontVariantNumeric: 'tabular-nums' }}>
+                  {formatDuration(track.duration)}
+                </div>
+                {streamLabel(track.playbackCount) != null ? (
+                  <div style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', marginTop: '3px', opacity: 0.92 }} title="Lectures SoundCloud">
+                    {streamLabel(track.playbackCount)}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>

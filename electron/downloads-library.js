@@ -31,11 +31,18 @@ function normalizeDownloadRecord(id, record) {
     artwork: record.artwork || null,
     url: record.url || null,
     sourceUnavailable: !!record.sourceUnavailable,
-    downloadedAt: record.downloadedAt || null
+    downloadedAt: record.downloadedAt || null,
+    playbackCount: record.playbackCount != null ? Number(record.playbackCount) : null
   };
 }
 
 function createDownloadRecord(track, localPath, now = () => new Date().toISOString()) {
+  const playback =
+    track?.playbackCount != null
+      ? Number(track.playbackCount)
+      : track?.playback_count != null
+        ? Number(track.playback_count)
+        : null;
   return {
     localPath,
     title: track?.title || 'Piste telechargee',
@@ -44,7 +51,8 @@ function createDownloadRecord(track, localPath, now = () => new Date().toISOStri
     artwork: track?.artwork || null,
     url: track?.url || null,
     sourceUnavailable: !!track?.unavailable,
-    downloadedAt: now()
+    downloadedAt: now(),
+    ...(playback != null && !Number.isNaN(playback) ? { playbackCount: playback } : {})
   };
 }
 

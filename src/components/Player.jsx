@@ -1,5 +1,31 @@
 import { useState, useRef, useEffect } from 'react';
 import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Heart, Minimize2, Maximize2, Image as ImageIcon, Repeat } from 'lucide-react';
+import { TrackArtPlaceholder } from './MediaPlaceholder';
+import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
+import { formatStreamCount } from '../utils/formatPlayback';
+
+function prepareAudioElementForSrc(audio, url) {
+  if (!audio || !url) return;
+  if (url.startsWith('file:')) {
+    audio.removeAttribute('crossorigin');
+  } else {
+    audio.crossOrigin = 'anonymous';
+  }
+}
+
+async function resolvePlaybackUrl(track) {
+  if (!track) return '';
+  if (track.localPath) {
+    try {
+      const fileUrl = await window.electronAPI?.localPathToAudioUrl?.(track.localPath);
+      if (typeof fileUrl === 'string' && fileUrl.startsWith('file:')) return fileUrl;
+    } catch {
+      /* fallback proxy */
+    }
+    return `http://127.0.0.1:3006/?url=${encodeURIComponent(`file://${track.localPath}`)}`;
+  }
+  return `http://127.0.0.1:3006/?url=${encodeURIComponent(track.url)}`;
+}
 
 function createReverbBuffer(audioCtx, duration = 2.5, decay = 2.0) {
   const sampleRate = audioCtx.sampleRate;
@@ -18,6 +44,8 @@ function createReverbBuffer(audioCtx, duration = 2.5, decay = 2.0) {
 export default function Player({
   currentTrack,
   onNext,
+  onManualNext,
+  playbackManualEpoch,
   onPrev,
   onError,
   isMini,
@@ -29,7 +57,8 @@ export default function Player({
   reverb,
   reverbEnabled,
   djMode,
-  onPlaybackChange
+  onPlaybackChange,
+  onOpenArtist
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -40,7 +69,8 @@ export default function Player({
   const audioARef = useRef(null);
   const audioBRef = useRef(null);
   const [activeDeck, setActiveDeck] = useState('A');
-  
+  const activeDeckRef = useRef('A');
+
   const gainARef = useRef(null);
   const gainBRef = useRef(null);
   
@@ -52,20 +82,31 @@ export default function Player({
   
   const requestRef = useRef();
   const isDraggingRef = useRef(false);
+  /** Après erreur streaming : pas de auto-next tant que l'utilisateur n'a pas choisi une autre piste / suivant manuel. */
+  const blockEndedAdvanceRef = useRef(false);
 
-  const getActiveAudio = () => activeDeck === 'A' ? audioARef.current : audioBRef.current;
+  const getActiveAudio = () => (activeDeckRef.current === 'A' ? audioARef.current : audioBRef.current);
+
+
+  /** Prefer decoded file duration so seeks match local/downloaded files (metadata ms can differ). */
+  const durationSecForTrack = (audio, track) => {
+    if (audio && Number.isFinite(audio.duration) && audio.duration > 0) return audio.duration;
+    const metaMs = track?.duration;
+    if (typeof metaMs === 'number' && metaMs > 0) return metaMs / 1000;
+    return 0;
+  };
 
   const updateProgress = () => {
     const audio = getActiveAudio();
     if (audio && currentTrack) {
       const current = audio.currentTime;
-      const durationSec = currentTrack.duration / 1000;
-      
-      if (!isDraggingRef.current) {
+      const durationSec = durationSecForTrack(audio, currentTrack);
+
+      if (!isDraggingRef.current && durationSec > 0) {
         setProgress((current / durationSec) * 100 || 0);
       }
-      
-      if (djMode && !isLooping && durationSec > 10) {
+
+      if (djMode && !isLooping && !blockEndedAdvanceRef.current && durationSec > 10) {
           if (current >= durationSec - 3.0 && audio.dataset.fading !== "true") {
               audio.dataset.fading = "true";
               onNext();
@@ -76,6 +117,10 @@ export default function Player({
       requestRef.current = requestAnimationFrame(updateProgress);
     }
   };
+
+  useEffect(() => {
+    blockEndedAdvanceRef.current = false;
+  }, [playbackManualEpoch]);
 
   useEffect(() => {
     if (isPlaying) {
@@ -199,60 +244,71 @@ export default function Player({
       });
       setIsPlaying(false);
       setProgress(0);
+      blockEndedAdvanceRef.current = false;
+      activeDeckRef.current = 'A';
+      setActiveDeck('A');
       return;
     }
 
     if (!audioCtxRef.current) return;
-    
-    setIsPlaying(true);
-    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
 
-    // Use localPath if available, otherwise SoundCloud proxy
-    // Ensure the URL is correctly formed for the proxy
-    const finalUrl = currentTrack.localPath 
-      ? `http://127.0.0.1:3006/?url=${encodeURIComponent('file://' + currentTrack.localPath)}`
-      : `http://127.0.0.1:3006/?url=${encodeURIComponent(currentTrack.url)}`;
+    let cancelled = false;
 
-    const streamUrl = finalUrl;
-    const newDeck = activeDeck === 'A' ? 'B' : 'A';
-    const activeAudio = activeDeck === 'A' ? audioARef.current : audioBRef.current;
-    const nextAudio = activeDeck === 'A' ? audioBRef.current : audioARef.current;
-    
-    const activeGain = activeDeck === 'A' ? gainARef.current : gainBRef.current;
-    const nextGain = activeDeck === 'A' ? gainBRef.current : gainARef.current;
+    (async () => {
+      const streamUrl = await resolvePlaybackUrl(currentTrack);
+      if (cancelled) return;
 
-    // Detect if this is an automatic transition (DJ mode triggers at 3 seconds before end)
-    const isAutomaticTransition = activeAudio && activeAudio.dataset.fading === "true";
+      setIsPlaying(true);
+      if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
 
-    if (djMode && isAutomaticTransition) {
-      nextAudio.src = streamUrl;
-      nextAudio.dataset.fading = "false";
-      nextAudio.play().catch(() => {});
-      
-      nextGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
-      nextGain.gain.linearRampToValueAtTime(1, audioCtxRef.current.currentTime + 3);
-      
-      if (activeAudio && !activeAudio.paused) {
-        activeGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
-        activeGain.gain.linearRampToValueAtTime(0, audioCtxRef.current.currentTime + 3);
-        setTimeout(() => {
+      const newDeck = activeDeck === 'A' ? 'B' : 'A';
+      activeDeckRef.current = newDeck;
+
+      const activeAudio = activeDeck === 'A' ? audioARef.current : audioBRef.current;
+      const nextAudio = activeDeck === 'A' ? audioBRef.current : audioARef.current;
+
+      const activeGain = activeDeck === 'A' ? gainARef.current : gainBRef.current;
+      const nextGain = activeDeck === 'A' ? gainBRef.current : gainARef.current;
+
+      const isAutomaticTransition = activeAudio && activeAudio.dataset.fading === "true";
+
+      if (djMode && isAutomaticTransition) {
+        prepareAudioElementForSrc(nextAudio, streamUrl);
+        nextAudio.src = streamUrl;
+        nextAudio.dataset.fading = "false";
+        nextAudio.play().catch(() => {});
+
+        nextGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
+        nextGain.gain.linearRampToValueAtTime(1, audioCtxRef.current.currentTime + 3);
+
+        if (activeAudio && !activeAudio.paused) {
+          activeGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
+          activeGain.gain.linearRampToValueAtTime(0, audioCtxRef.current.currentTime + 3);
+          setTimeout(() => {
+            activeAudio.pause();
+            activeAudio.removeAttribute('src');
+          }, 3000);
+        }
+      } else {
+        if (activeAudio) {
           activeAudio.pause();
           activeAudio.removeAttribute('src');
-        }, 3000);
+        }
+        prepareAudioElementForSrc(nextAudio, streamUrl);
+        nextAudio.src = streamUrl;
+        nextAudio.dataset.fading = "false";
+        nextAudio.play().catch(() => {});
+        nextGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
+        activeGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
       }
-    } else {
-      if (activeAudio) {
-        activeAudio.pause();
-        activeAudio.removeAttribute('src');
-      }
-      nextAudio.src = streamUrl;
-      nextAudio.dataset.fading = "false";
-      nextAudio.play().catch(() => {});
-      nextGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
-      activeGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
-    }
-    
-    setActiveDeck(newDeck);
+
+      if (cancelled) return;
+      setActiveDeck(newDeck);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentTrack]);
 
   useEffect(() => {
@@ -283,7 +339,23 @@ export default function Player({
     return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
-  const handleEnded = () => {
+  const handleAudioError = (e) => {
+    const activeEl = getActiveAudio();
+    if (!activeEl || e.target !== activeEl) return;
+    blockEndedAdvanceRef.current = true;
+    activeEl.pause();
+    setIsPlaying(false);
+    onError?.();
+  };
+
+  const handleEnded = (e) => {
+    const activeEl = getActiveAudio();
+    if (!activeEl || e.target !== activeEl) return;
+    if (blockEndedAdvanceRef.current) return;
+    if (activeEl.error != null) return;
+    const dur = durationSecForTrack(activeEl, currentTrack);
+    // Ignore bogus immediate `ended` (often after failed stream / teardown) while metadata duration looks long.
+    if (Number.isFinite(dur) && dur > 8 && activeEl.currentTime < 0.5) return;
     if (isLooping) {
       const audio = getActiveAudio();
       audio.currentTime = 0;
@@ -293,45 +365,110 @@ export default function Player({
     }
   };
 
-  const isFav = currentTrack ? (favorites || []).find(f => f.id === currentTrack.id) : false;
+  const skipForward = onManualNext ?? onNext;
 
-  const renderProgressBar = () => (
+  const isFav = currentTrack ? (favorites || []).find(f => f.id === currentTrack.id) : false;
+  const streamsFmt = currentTrack ? formatStreamCount(currentTrack.playbackCount) : null;
+  const playbackLabel = streamsFmt != null ? `${streamsFmt} lectures` : null;
+
+  const renderArtistLabel = (align = 'left') => {
+    if (!currentTrack?.artist) return null;
+    const permalink = resolveArtistPermalinkUrl(currentTrack);
+    const canOpen = typeof onOpenArtist === 'function' && !!permalink;
+    const color = 'var(--text-secondary)';
+    const base = {
+      margin: 0,
+      fontSize: '0.85rem',
+      color,
+      width: '100%',
+      textAlign: align
+    };
+    if (!canOpen) {
+      return <p className="truncate" style={base}>{currentTrack.artist}</p>;
+    }
+    return (
+      <button
+        type="button"
+        className="truncate"
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          onOpenArtist(currentTrack);
+        }}
+        title="Voir le profil"
+        style={{
+          ...base,
+          background: 'none',
+          border: 'none',
+          padding: 0,
+          cursor: 'pointer',
+          font: 'inherit',
+          display: 'block',
+          WebkitAppRegion: 'no-drag',
+          position: 'relative',
+          zIndex: 5,
+          pointerEvents: 'auto'
+        }}
+      >
+        {currentTrack.artist}
+      </button>
+    );
+  };
+
+  const renderProgressBar = () => {
+    const audio = getActiveAudio();
+    const durationSec = durationSecForTrack(audio, currentTrack);
+    return (
     <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '10px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-      <span style={{ width: '40px', textAlign: 'right' }}>{getActiveAudio() ? formatTime(getActiveAudio().currentTime) : '0:00'}</span>
+      <span style={{ width: '40px', textAlign: 'right' }}>{audio ? formatTime(audio.currentTime) : '0:00'}</span>
       <input 
         type="range" min="0" max="100" step="any" value={progress} 
         onPointerDown={() => { isDraggingRef.current = true; }}
         onPointerUp={() => { isDraggingRef.current = false; }}
+        onInput={(e) => {
+          const val = parseFloat(e.target.value);
+          setProgress(val);
+          const el = getActiveAudio();
+          const dur = durationSecForTrack(el, currentTrack);
+          if (el && dur > 0) el.currentTime = (val / 100) * dur;
+        }}
         onChange={(e) => {
           const val = parseFloat(e.target.value);
           setProgress(val);
-          const audio = getActiveAudio();
-          if (audio && currentTrack) {
-            audio.currentTime = (val / 100) * (currentTrack.duration / 1000);
-          }
+          const el = getActiveAudio();
+          const dur = durationSecForTrack(el, currentTrack);
+          if (el && dur > 0) el.currentTime = (val / 100) * dur;
         }}
         style={{ flex: 1, height: '4px', appearance: 'none', background: 'var(--surface-color)', borderRadius: '2px', cursor: 'pointer' }} 
       />
-      <span style={{ width: '40px' }}>{formatTime(currentTrack ? currentTrack.duration / 1000 : 0)}</span>
+      <span style={{ width: '40px' }}>{formatTime(durationSec)}</span>
     </div>
-  );
+    );
+  };
 
   return (
     <>
-      <audio ref={audioARef} onEnded={handleEnded} onError={onError} crossOrigin="anonymous" />
-      <audio ref={audioBRef} onEnded={handleEnded} onError={onError} crossOrigin="anonymous" />
+      <audio ref={audioARef} onEnded={handleEnded} onError={handleAudioError} />
+      <audio ref={audioBRef} onEnded={handleEnded} onError={handleAudioError} />
 
       {currentTrack && isMini && (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', WebkitAppRegion: 'no-drag', zIndex: 100 }}>
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', WebkitAppRegion: 'no-drag', zIndex: 100, pointerEvents: 'auto' }}>
           <h4 className="truncate" style={{ margin: '0 0 5px 0', fontSize: '1rem', fontWeight: 600, width: '100%', textAlign: 'center' }}>{currentTrack.title}</h4>
-          <p className="truncate" style={{ margin: '0 0 15px 0', fontSize: '0.85rem', color: 'var(--text-secondary)', width: '100%', textAlign: 'center' }}>{currentTrack.artist}</p>
+          <div style={{ margin: '0 0 15px 0', width: '100%', WebkitAppRegion: 'no-drag', position: 'relative', zIndex: 5, pointerEvents: 'auto' }}>
+            {renderArtistLabel('center')}
+            {playbackLabel ? (
+              <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)', width: '100%', textAlign: 'center' }} title="Lectures SoundCloud">
+                {playbackLabel}
+              </p>
+            ) : null}
+          </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '15px' }}>
             <button onClick={onPrev} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><SkipBack size={20} /></button>
             <button onClick={togglePlay} style={{ background: 'var(--text-primary)', border: 'none', color: 'var(--bg-color)', width: '40px', height: '40px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
               {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '3px' }} />}
             </button>
-            <button onClick={onNext} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><SkipForward size={20} /></button>
+            <button onClick={skipForward} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><SkipForward size={20} /></button>
           </div>
 
           {renderProgressBar()}
@@ -351,17 +488,22 @@ export default function Player({
       )}
 
       {currentTrack && !isMini && (
-        <div className="glass-panel" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 50, WebkitAppRegion: 'no-drag' }}>
+        <div className="glass-panel" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 50, WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px', width: '30%', flexShrink: 0 }}>
             {currentTrack.artwork ? (
               <img src={currentTrack.artwork} alt="cover" style={{ width: '60px', height: '60px', borderRadius: '8px', objectFit: 'cover', flexShrink: 0 }} />
             ) : (
-              <div style={{ width: '60px', height: '60px', borderRadius: '8px', backgroundColor: 'rgba(255,255,255,0.1)', flexShrink: 0 }}></div>
+              <TrackArtPlaceholder size={60} radius={8} />
             )}
             
-            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', WebkitAppRegion: 'no-drag', position: 'relative', zIndex: 5, pointerEvents: 'auto' }}>
               <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>{currentTrack.title}</h4>
-              <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{currentTrack.artist}</p>
+              {renderArtistLabel('left')}
+              {playbackLabel ? (
+                <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: 'var(--text-secondary)' }} title="Lectures SoundCloud">
+                  {playbackLabel}
+                </p>
+              ) : null}
             </div>
             
             <button onClick={(e) => toggleFavorite(currentTrack, e)} style={{ flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', color: isFav ? 'var(--accent-color)' : 'var(--text-secondary)' }}>
@@ -375,7 +517,7 @@ export default function Player({
               <button onClick={togglePlay} style={{ background: 'var(--text-primary)', border: 'none', color: 'var(--bg-color)', width: '40px', height: '40px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
                 {isPlaying ? <Pause size={20} fill="currentColor" /> : <Play size={20} fill="currentColor" style={{ marginLeft: '3px' }} />}
               </button>
-              <button onClick={onNext} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><SkipForward size={24} /></button>
+              <button onClick={skipForward} style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><SkipForward size={24} /></button>
               <button onClick={() => setIsLooping(!isLooping)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: isLooping ? 'var(--accent-color)' : 'var(--text-secondary)', position: 'absolute', right: '10%' }}>
                 <Repeat size={18} />
               </button>

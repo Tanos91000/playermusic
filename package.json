@@ -1,9 +1,12 @@
 {
   "name": "playermusic",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "private": true,
   "description": "Aura Player — SoundCloud desktop player with downloads",
   "author": "TanosVape",
+  "discordClientId": "",
+  "discordLargeImageKey": "",
+  "spotifyClientId": "",
   "main": "electron/main.js",
   "scripts": {
     "ensure:ytdlp": "node scripts/ensure-ytdlp-standalone.js",
@@ -38,6 +41,16 @@
       "node_modules/ffmpeg-static/**",
       "node_modules/ffprobe-static/**"
     ],
+    "extraResources": [
+      {
+        "from": "icons/icon.icns",
+        "to": "icon.icns"
+      },
+      {
+        "from": "icons/icon.ico",
+        "to": "icon.ico"
+      }
+    ],
     "publish": [
       {
         "provider": "github",
@@ -64,6 +77,7 @@
     }
   },
   "dependencies": {
+    "discord-rpc": "^4.0.1",
     "electron-updater": "^6.8.3",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",

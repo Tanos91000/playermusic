@@ -1,5 +1,7 @@
 import { HardDrive, Trash2 } from 'lucide-react';
 import PlayingIndicator from './PlayingIndicator';
+import { TrackArtPlaceholder } from './MediaPlaceholder';
+import { formatStreamCount } from '../utils/formatPlayback';
 
 function formatBytes(bytes) {
   if (!bytes) return '0 o';
@@ -92,7 +94,7 @@ export default function DownloadsView({ library, currentTrack, isAudioPlaying = 
               {track.artwork ? (
                 <img src={track.artwork} alt="cover" style={{ width: '48px', height: '48px', borderRadius: '4px', objectFit: 'cover', marginRight: '15px' }} />
               ) : (
-                <div style={{ width: '48px', height: '48px', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.1)', marginRight: '15px' }} />
+                <TrackArtPlaceholder size={48} radius={4} style={{ marginRight: '15px' }} />
               )}
 
               <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
@@ -101,6 +103,11 @@ export default function DownloadsView({ library, currentTrack, isAudioPlaying = 
                 </h4>
                 <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                   {track.artist}
+                  {formatStreamCount(track.playbackCount) != null ? (
+                    <span style={{ marginLeft: '8px', opacity: 0.9 }} title="Lectures au moment du téléchargement">
+                      · {formatStreamCount(track.playbackCount)} lectures
+                    </span>
+                  ) : null}
                 </p>
               </div>
 

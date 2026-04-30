@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -12,10 +13,30 @@ const {
   getDownloadPath,
   getDownloadedTracksLibrary
 } = require('./downloads-library');
+const discordPresence = require('./discord-presence');
+const { runSpotifyLikesImport, SPOTIFY_REDIRECT_URI } = require('./spotify-import');
+const { searchSoundCloudUnified, getSoundCloudArtistBundle } = require('./soundcloud-tracks');
 
 const youtubeDl = createYoutubeDlUnpack(path);
 
 let mainWindow;
+
+function resolveAppIcon() {
+  const candidates = [];
+  if (process.platform === 'win32') {
+    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'icon.ico'));
+    candidates.push(path.join(__dirname, '../icons/icon.ico'));
+  } else {
+    if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'icon.icns'));
+    candidates.push(path.join(__dirname, '../icons/icon.icns'));
+  }
+  for (const p of candidates) {
+    if (!fs.existsSync(p)) continue;
+    const img = nativeImage.createFromPath(p);
+    if (!img.isEmpty()) return img;
+  }
+  return undefined;
+}
 const downloadsDir = path.join(app.getPath('userData'), 'downloads');
 const downloadsFile = path.join(app.getPath('userData'), 'downloads.json');
 
@@ -45,6 +66,78 @@ function saveDownloads(data) {
   fs.writeFileSync(downloadsFile, JSON.stringify(data, null, 2));
 }
 
+/** Required for <audio> seeking: browsers issue Range requests against byte offsets. */
+function serveLocalAudioFile(req, res, filePath) {
+  if (!fs.existsSync(filePath)) {
+    console.error('Local file not found:', filePath);
+    res.statusCode = 404;
+    return res.end('File not found');
+  }
+
+  const stats = fs.statSync(filePath);
+  const fileSize = stats.size;
+  const contentType = getAudioContentType(filePath);
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', contentType);
+
+  if (req.method === 'HEAD') {
+    res.statusCode = 200;
+    res.setHeader('Content-Length', fileSize);
+    return res.end();
+  }
+
+  if (req.method !== 'GET') {
+    res.statusCode = 405;
+    return res.end();
+  }
+
+  const range = req.headers.range;
+  if (range) {
+    const m = /^bytes=(\d*)-(\d*)$/.exec(range);
+    if (!m) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.end();
+    }
+
+    let start = m[1] === '' ? NaN : parseInt(m[1], 10);
+    let end = m[2] === '' ? NaN : parseInt(m[2], 10);
+    if (!Number.isFinite(start)) start = 0;
+    if (!Number.isFinite(end)) end = fileSize - 1;
+
+    if (start < 0 || start >= fileSize || end < start) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${fileSize}`);
+      return res.end();
+    }
+
+    if (end >= fileSize) end = fileSize - 1;
+
+    const chunkSize = end - start + 1;
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.setHeader('Content-Length', chunkSize);
+
+    const rs = fs.createReadStream(filePath, { start, end });
+    rs.on('error', () => {
+      if (!res.headersSent) res.statusCode = 500;
+      res.destroy();
+    });
+    return rs.pipe(res);
+  }
+
+  res.statusCode = 200;
+  res.setHeader('Content-Length', fileSize);
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', () => {
+    if (!res.headersSent) res.statusCode = 500;
+    res.destroy();
+  });
+  return stream.pipe(res);
+}
+
 // Tiny local server to proxy SoundCloud streams (replaces Next.js API route)
 const server = http.createServer(async (req, res) => {
   const urlParams = new URLSearchParams(req.url.split('?')[1]);
@@ -55,21 +148,11 @@ const server = http.createServer(async (req, res) => {
     return res.end('Missing url parameter');
   }
 
-  // Handle local file serving
+  // Handle local file serving (must support Range so <audio> can seek)
   if (url.startsWith('file://')) {
     const decodedUrl = decodeURIComponent(url);
     const filePath = decodedUrl.replace('file://', '');
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Content-Type', getAudioContentType(filePath));
-      const stats = fs.statSync(filePath);
-      res.setHeader('Content-Length', stats.size);
-      return fs.createReadStream(filePath).pipe(res);
-    } else {
-      console.error('Local file not found:', filePath);
-      res.statusCode = 404;
-      return res.end('File not found');
-    }
+    return serveLocalAudioFile(req, res, filePath);
   }
 
   try {
@@ -162,10 +245,11 @@ function setupAutoUpdater() {
   }, 5000);
 }
 
-function createWindow() {
+function createWindow(icon) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    ...(icon ? { icon } : {}),
     titleBarStyle: 'hiddenInset', // Native look on macOS
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -209,20 +293,33 @@ app.whenReady().then(() => {
     console.error('[Aura] yt-dlp absent — téléchargements impossibles:', ytBin);
   }
 
+  const appIcon = resolveAppIcon();
+  if (process.platform === 'darwin' && appIcon) {
+    try {
+      app.dock.setIcon(appIcon);
+    } catch {
+      /* ignore */
+    }
+  }
+
   // Start the proxy server
   server.listen(3006, () => {
     console.log('Stream proxy server running on port 3006');
   });
 
-  createWindow();
+  createWindow(appIcon);
 
   setupAutoUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+      createWindow(resolveAppIcon());
     }
   });
+});
+
+app.on('before-quit', () => {
+  discordPresence.shutdown().catch(() => {});
 });
 
 app.on('window-all-closed', () => {
@@ -239,36 +336,63 @@ ipcMain.handle('resize-window', (event, { width, height, isMini }) => {
   }
 });
 
-// IPC Handler for SoundCloud Search
+// IPC Handler for SoundCloud Search (tracks + artists)
 ipcMain.handle('search-soundcloud', async (event, query) => {
   try {
-    const searchResults = await scdl.search({
-      query,
-      resourceType: 'tracks',
-      limit: 30
-    });
-
-    const downloads = getDownloads();
-
-    return searchResults.collection
-      .map(track => {
-        const isUnavailable = track.policy === 'BLOCK' || track.policy === 'SNIP';
-        const localPath = getDownloadPath(downloads, track.id);
-        return {
-          id: track.id,
-          title: track.title,
-          artist: track.user.username,
-          duration: track.duration, // in ms
-          artwork: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : null,
-          url: track.permalink_url,
-          unavailable: isUnavailable && !localPath,
-          isFixed: !!localPath,
-          localPath: localPath
-        };
-      });
+    return await searchSoundCloudUnified(scdl, query, getDownloads, getDownloadPath, 30, 15);
   } catch (error) {
     console.error('Search error in IPC:', error);
     throw error;
+  }
+});
+
+ipcMain.handle('get-soundcloud-artist', async (_event, profileUrl) => {
+  if (typeof profileUrl !== 'string' || !profileUrl.trim()) {
+    throw new Error('Missing profile URL');
+  }
+  try {
+    return await getSoundCloudArtistBundle(scdl, profileUrl.trim(), getDownloads, getDownloadPath);
+  } catch (error) {
+    console.error('Artist profile error in IPC:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('open-external-url', (_event, url) => {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url.trim())) return false;
+  shell.openExternal(url.trim());
+  return true;
+});
+
+ipcMain.handle('get-spotify-redirect-uri', () => SPOTIFY_REDIRECT_URI);
+
+ipcMain.handle('spotify-import-likes', async (event, { clientId }) => {
+  const wc = event.sender;
+  const sendProgress = (payload) => {
+    try {
+      if (!wc.isDestroyed()) wc.send('spotify-import-progress', payload);
+    } catch {
+      /* ignore */
+    }
+  };
+  try {
+    return await runSpotifyLikesImport({
+      clientId,
+      shell,
+      sendProgress,
+      scdl,
+      getDownloads,
+      getDownloadPath
+    });
+  } catch (err) {
+    console.error('[Aura] spotify-import-likes:', err);
+    return {
+      ok: false,
+      error: err?.message || String(err),
+      tracks: [],
+      unmatched: [],
+      spotifyTotal: 0
+    };
   }
 });
 
@@ -337,6 +461,24 @@ ipcMain.handle('delete-downloaded-track', (_event, trackId) => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+ipcMain.handle('discord-set-client-id', (_event, id) => {
+  discordPresence.setRendererClientId(typeof id === 'string' ? id : '');
+  return null;
+});
+
+ipcMain.handle('local-path-to-file-url', (_event, absPath) => {
+  if (typeof absPath !== 'string' || !absPath.trim()) return '';
+  try {
+    return pathToFileURL(path.normalize(absPath.trim())).href;
+  } catch {
+    return '';
+  }
+});
+
+ipcMain.handle('discord-update-presence', (_event, payload) => {
+  return discordPresence.update(payload || {}).catch(() => {});
 });
 
 ipcMain.handle('restart-app', () => {

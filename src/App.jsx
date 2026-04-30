@@ -1,10 +1,14 @@
-import { useState, useEffect } from 'react';
-import { Search, Heart, X, Download as DownloadIcon, Settings as SettingsIcon } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { Search, Heart, Home, X, Undo2, Download as DownloadIcon, Settings as SettingsIcon } from 'lucide-react';
 import Player from './components/Player';
 import TrackList from './components/TrackList';
 import Settings from './components/Settings';
 import AnimatedBackground from './components/AnimatedBackground';
 import DownloadsView from './components/DownloadsView';
+import HomeView from './components/HomeView';
+import ArtistProfileView from './components/ArtistProfileView';
+import { TrackArtPlaceholder, RemoteAvatar } from './components/MediaPlaceholder';
+import { resolveArtistPermalinkUrl } from './utils/soundcloudArtist';
 
 const emptyDownloadsLibrary = {
   downloadsDir: '',
@@ -13,11 +17,34 @@ const emptyDownloadsLibrary = {
   totalBytes: 0
 };
 
+function loadRecentTracks() {
+  try {
+    const raw = localStorage.getItem('aura_recent_tracks');
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function homeGreeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Bonjour';
+  if (h < 18) return 'Bon après-midi';
+  return 'Bonsoir';
+}
+
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('Drake');
   const [tracks, setTracks] = useState([]);
+  const [searchArtists, setSearchArtists] = useState([]);
+  const [searchSubView, setSearchSubView] = useState('list');
+  const [artistProfile, setArtistProfile] = useState(null);
+  const [artistProfileTracks, setArtistProfileTracks] = useState([]);
+  const [artistProfileLoading, setArtistProfileLoading] = useState(false);
   const [favorites, setFavorites] = useState([]);
-  const [activeTab, setActiveTab] = useState('search');
+  const [recentTracks, setRecentTracks] = useState(loadRecentTracks);
+  const [activeTab, setActiveTab] = useState('home');
   const [eqBands, setEqBands] = useState([0, 0, 0, 0, 0]);
   const [reverb, setReverb] = useState(0);
   const [reverbEnabled, setReverbEnabled] = useState(false);
@@ -65,10 +92,16 @@ export default function App() {
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playlistContext, setPlaylistContext] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
+  const [playbackManualEpoch, setPlaybackManualEpoch] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const discordTrackStartRef = useRef({ trackId: null, startedAt: 0 });
   
   const [isMiniPlayer, setIsMiniPlayer] = useState(false);
   const [showLargeCover, setShowLargeCover] = useState(false);
+  const [favoritesSearch, setFavoritesSearch] = useState('');
+  const [streamUnavailableNotice, setStreamUnavailableNotice] = useState(null);
+  const mainScrollRef = useRef(null);
+  const streamNoticeScrollRestoreRef = useRef(null);
 
   useEffect(() => {
     const saved = localStorage.getItem('aura_favorites');
@@ -96,6 +129,50 @@ export default function App() {
     loadDownloadedLibrary();
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== 'search') {
+      setSearchSubView('list');
+      setArtistProfile(null);
+      setArtistProfileTracks([]);
+      setArtistProfileLoading(false);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (currentTrack && isAudioPlaying) {
+      if (discordTrackStartRef.current.trackId !== currentTrack.id) {
+        discordTrackStartRef.current = { trackId: currentTrack.id, startedAt: Date.now() };
+      }
+    }
+  }, [currentTrack, isAudioPlaying]);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.updateDiscordPresence) return;
+
+    const storedId = localStorage.getItem('aura_discord_client_id');
+    if (storedId?.trim() && api.setDiscordClientId) {
+      api.setDiscordClientId(storedId.trim());
+    }
+
+    if (!currentTrack) {
+      api.updateDiscordPresence({ mode: 'idle' });
+      return;
+    }
+
+    const startedAt =
+      discordTrackStartRef.current.trackId === currentTrack.id
+        ? discordTrackStartRef.current.startedAt
+        : Date.now();
+
+    api.updateDiscordPresence({
+      mode: isAudioPlaying ? 'playing' : 'paused',
+      title: currentTrack.title,
+      artist: currentTrack.artist || '',
+      startedAt: isAudioPlaying ? startedAt : undefined
+    });
+  }, [currentTrack, isAudioPlaying]);
+
   const handleEqChange = (bands) => {
     setEqBands(bands);
     localStorage.setItem('aura_eq_bands', JSON.stringify(bands));
@@ -121,6 +198,28 @@ export default function App() {
     localStorage.setItem('aura_favorites', JSON.stringify(newFavs));
   };
 
+  const mergeSpotifyLikesIntoFavorites = (incomingTracks) => {
+    if (!Array.isArray(incomingTracks) || incomingTracks.length === 0) {
+      return { added: 0, duplicates: 0 };
+    }
+    const ids = new Set(favorites.map((t) => t.id));
+    const merged = [...favorites];
+    let added = 0;
+    let duplicates = 0;
+    for (const t of incomingTracks) {
+      if (ids.has(t.id)) {
+        duplicates += 1;
+        continue;
+      }
+      ids.add(t.id);
+      merged.push(t);
+      added += 1;
+    }
+    saveFavorites(merged);
+    refreshFavoritesWithDownloads(merged);
+    return { added, duplicates };
+  };
+
   const toggleFavorite = (track, e) => {
     if (e) e.stopPropagation();
     const isFav = favorites.find(f => f.id === track.id);
@@ -131,30 +230,76 @@ export default function App() {
     }
   };
 
+  const openArtistProfile = async (permalinkUrl) => {
+    if (!permalinkUrl?.trim() || !window.electronAPI?.getSoundCloudArtist) return;
+    setSearchSubView('artist');
+    setArtistProfileLoading(true);
+    setArtistProfile(null);
+    setArtistProfileTracks([]);
+    try {
+      const bundle = await window.electronAPI.getSoundCloudArtist(permalinkUrl.trim());
+      if (bundle?.profile) setArtistProfile(bundle.profile);
+      setArtistProfileTracks(Array.isArray(bundle?.tracks) ? bundle.tracks : []);
+    } catch (error) {
+      console.error('Artist profile failed', error);
+      alert('Impossible de charger le profil artiste.');
+      setSearchSubView('list');
+    } finally {
+      setArtistProfileLoading(false);
+    }
+  };
+
+  const openArtistFromTrack = (track) => {
+    const permalink = resolveArtistPermalinkUrl(track);
+    if (!permalink) return;
+    setActiveTab('search');
+    openArtistProfile(permalink);
+  };
+
   const handleSearch = async (e) => {
     if (e) e.preventDefault();
     if (!searchQuery.trim()) return;
 
+    setSearchSubView('list');
+    setArtistProfile(null);
+    setArtistProfileTracks([]);
     setIsLoading(true);
     try {
       const data = await window.electronAPI.searchSoundCloud(searchQuery);
-      if (Array.isArray(data)) {
+      if (data && typeof data === 'object' && Array.isArray(data.tracks)) {
+        setTracks(data.tracks);
+        setSearchArtists(Array.isArray(data.artists) ? data.artists : []);
+      } else if (Array.isArray(data)) {
         setTracks(data);
+        setSearchArtists([]);
       } else {
         setTracks([]);
+        setSearchArtists([]);
       }
     } catch (error) {
       setTracks([]);
+      setSearchArtists([]);
     } finally {
       setIsLoading(false);
     }
   };
 
   const playTrack = (track, index, contextList) => {
+    setPlaybackManualEpoch((n) => n + 1);
     setCurrentTrack(track);
     setPlaylistContext(contextList);
     setCurrentIndex(index);
     if (!isMiniPlayer) setShowLargeCover(true);
+
+    setRecentTracks(prev => {
+      const next = [{ ...track }, ...prev.filter(t => t.id !== track.id)].slice(0, 20);
+      try {
+        localStorage.setItem('aura_recent_tracks', JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to persist recent tracks', e);
+      }
+      return next;
+    });
   };
 
   const markTrackDownloaded = (track, localPath) => ({
@@ -179,6 +324,7 @@ export default function App() {
     const updateTrack = (item) => item.id === track.id ? markTrackDownloaded(item, result.localPath) : item;
 
     setTracks(prev => prev.map(updateTrack));
+    setArtistProfileTracks(prev => prev.map(updateTrack));
     setFavorites(prev => {
       const next = prev.map(updateTrack);
       localStorage.setItem('aura_favorites', JSON.stringify(next));
@@ -200,6 +346,7 @@ export default function App() {
       setDownloadsLibrary(library || emptyDownloadsLibrary);
 
       setTracks(prev => prev.map(item => clearTrackDownload(item, track)));
+      setArtistProfileTracks(prev => prev.map(item => clearTrackDownload(item, track)));
       setFavorites(prev => {
         const next = prev.map(item => clearTrackDownload(item, track));
         localStorage.setItem('aura_favorites', JSON.stringify(next));
@@ -221,7 +368,8 @@ export default function App() {
     }
   };
 
-  const playNext = () => {
+  /** Passage auto en fin de morceau — ne doit pas lever le blocage après erreur réseau. */
+  const playNextAuto = () => {
     if (currentIndex < playlistContext.length - 1) {
       const nextIndex = currentIndex + 1;
       setCurrentTrack(playlistContext[nextIndex]);
@@ -229,8 +377,15 @@ export default function App() {
     }
   };
 
+  /** Bouton suivant / intention utilisateur — débloque la lecture après une erreur. */
+  const playNextManual = () => {
+    setPlaybackManualEpoch((n) => n + 1);
+    playNextAuto();
+  };
+
   const playPrev = () => {
     if (currentIndex > 0) {
+      setPlaybackManualEpoch((n) => n + 1);
       const prevIndex = currentIndex - 1;
       setCurrentTrack(playlistContext[prevIndex]);
       setCurrentIndex(prevIndex);
@@ -238,11 +393,23 @@ export default function App() {
   };
 
   const handleStreamError = () => {
-    console.error("Stream failed, skipping to next track...");
-    playNext();
+    console.error('Stream failed');
+    const el = mainScrollRef.current;
+    if (el) streamNoticeScrollRestoreRef.current = el.scrollTop;
+    const title = currentTrack?.title?.trim() || 'Ce titre';
+    const artist = currentTrack?.artist?.trim() || '';
+    setStreamUnavailableNotice({ title, artist });
   };
 
-  const [favoritesSearch, setFavoritesSearch] = useState('');
+  useLayoutEffect(() => {
+    if (!streamUnavailableNotice) return;
+    const target = streamNoticeScrollRestoreRef.current;
+    const mainEl = mainScrollRef.current;
+    if (mainEl && typeof target === 'number') {
+      mainEl.scrollTop = target;
+    }
+    streamNoticeScrollRestoreRef.current = null;
+  }, [streamUnavailableNotice]);
 
   const toggleMiniPlayer = () => {
     const newMini = !isMiniPlayer;
@@ -255,17 +422,17 @@ export default function App() {
     }
   };
 
-  const currentList = activeTab === 'search'
-    ? tracks
-    : activeTab === 'downloads'
+  const currentList = activeTab === 'downloads'
       ? downloadsLibrary.tracks
-      : favorites.filter(t => {
+      : activeTab === 'favorites'
+      ? favorites.filter(t => {
         if (!favoritesSearch) return true;
         const search = favoritesSearch.toLowerCase();
         const titleMatch = t.title ? t.title.toLowerCase().includes(search) : false;
         const artistMatch = t.artist ? t.artist.toLowerCase().includes(search) : false;
         return titleMatch || artistMatch;
-      });
+      })
+      : [];
 
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
@@ -321,6 +488,89 @@ export default function App() {
         </div>
       )}
 
+      {streamUnavailableNotice && (
+        <div
+          role="dialog"
+          aria-labelledby="stream-unavail-title"
+          className="glass animate-fade-in"
+          style={{
+            position: 'fixed',
+            bottom: '96px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 90,
+            width: 'min(440px, calc(100vw - 32px))',
+            padding: '16px 18px',
+            borderRadius: '16px',
+            boxSizing: 'border-box',
+            WebkitAppRegion: 'no-drag',
+            backgroundColor: 'rgba(30, 30, 36, 0.94)',
+            border: '1px solid rgba(255,255,255,0.1)',
+            boxShadow: '0 18px 50px rgba(0,0,0,0.45)'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '6px' }}>
+            <button
+              type="button"
+              aria-label="Fermer"
+              onClick={() => setStreamUnavailableNotice(null)}
+              style={{
+                background: 'rgba(255,255,255,0.08)',
+                border: 'none',
+                borderRadius: '50%',
+                width: '34px',
+                height: '34px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                color: 'var(--text-secondary)'
+              }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+          <h3 id="stream-unavail-title" style={{ margin: '0 0 10px', fontSize: '1.05rem', fontWeight: 700 }}>
+            Streaming indisponible
+          </h3>
+          <p style={{ margin: '0 0 8px', fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+            « {streamUnavailableNotice.title} »
+            {streamUnavailableNotice.artist ? ` — ${streamUnavailableNotice.artist}` : ''} ne peut pas être lu en streaming depuis
+            SoundCloud.
+          </p>
+          <p style={{ margin: '0 0 18px', fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+            Télécharge la piste pour l&apos;écouter localement (bouton Download sur la piste).
+          </p>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            {currentIndex > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStreamUnavailableNotice(null);
+                  playPrev();
+                }}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  background: 'rgba(255,255,255,0.1)',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  padding: '10px 16px',
+                  borderRadius: '22px',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.88rem'
+                }}
+              >
+                <Undo2 size={18} />
+                Demi-tour
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Main Full UI */}
       {!isMiniPlayer && (
         <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '40px 20px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -328,11 +578,12 @@ export default function App() {
           <header style={{ marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', WebkitAppRegion: 'drag' }}>
             <div>
               <h1 className="text-gradient" style={{ fontSize: '2.5rem', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Aura Player</h1>
-              <div style={{ display: 'flex', gap: '20px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
-                <button onClick={() => setActiveTab('search')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'search' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'search' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s' }}>Recherche</button>
-                <button onClick={() => setActiveTab('favorites')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'favorites' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'favorites' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s' }}>Favoris</button>
-                <button onClick={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'downloads' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'downloads' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s', display: 'flex', alignItems: 'center', gap: '5px' }}><DownloadIcon size={16} /> Téléchargés</button>
-                <button onClick={() => setActiveTab('settings')} style={{ background: 'none', border: 'none', fontSize: '1.1rem', color: activeTab === 'settings' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', transition: 'color 0.2s', display: 'flex', alignItems: 'center', gap: '5px' }}><SettingsIcon size={16} /> Paramètres</button>
+              <div style={{ display: 'flex', gap: '15px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
+                <button className="glass" onClick={() => setActiveTab('home')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'home' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'home' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Home size={16} /> Accueil</button>
+                <button className="glass" onClick={() => setActiveTab('search')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'search' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'search' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Search size={16} /> Recherche</button>
+                <button className="glass" onClick={() => setActiveTab('favorites')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'favorites' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'favorites' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Heart size={16} /> Favoris</button>
+                <button className="glass" onClick={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'downloads' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'downloads' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><DownloadIcon size={16} /> Téléchargés</button>
+                <button className="glass" onClick={() => setActiveTab('settings')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'settings' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={16} /> Paramètres</button>
               </div>
             </div>
             
@@ -352,18 +603,140 @@ export default function App() {
             </div>
           </header>
 
-          <main style={{ flex: 1, overflowY: 'auto', paddingRight: '10px', paddingBottom: '120px', WebkitAppRegion: 'no-drag' }}>
+          <main
+            ref={mainScrollRef}
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowAnchor: 'none',
+              paddingRight: '10px',
+              paddingBottom: '120px',
+              WebkitAppRegion: 'no-drag'
+            }}
+          >
             {activeTab === 'settings' ? (
               <Settings 
                 eqBands={eqBands} setEqBands={handleEqChange} 
                 reverb={reverb} setReverb={handleReverbChange}
                 reverbEnabled={reverbEnabled} setReverbEnabled={handleReverbEnabledChange}
                 djMode={djMode} setDjMode={handleDjModeChange}
+                mergeSpotifyLikesIntoFavorites={mergeSpotifyLikesIntoFavorites}
+              />
+            ) : activeTab === 'home' ? (
+              <HomeView
+                greeting={homeGreeting()}
+                recentTracks={recentTracks}
+                favorites={favorites}
+                downloadTracks={downloadsLibrary.tracks}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                onPlay={(track, index, list) => playTrack(track, index, list)}
+                onNavigateSearch={() => setActiveTab('search')}
+                onNavigateFavorites={() => setActiveTab('favorites')}
+                onNavigateDownloads={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }}
               />
             ) : activeTab === 'search' && isLoading ? (
               <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
                 <p>Recherche en cours...</p>
               </div>
+            ) : activeTab === 'search' && searchSubView === 'artist' ? (
+              <ArtistProfileView
+                profile={artistProfile}
+                tracks={artistProfileTracks}
+                loading={artistProfileLoading}
+                onBack={() => {
+                  setSearchSubView('list');
+                  setArtistProfile(null);
+                  setArtistProfileTracks([]);
+                }}
+                onPlay={(track, index, list) => playTrack(track, index, list)}
+                onOpenArtistFromTrack={openArtistFromTrack}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onTrackDownloaded={handleTrackDownloaded}
+              />
+            ) : activeTab === 'search' ? (
+              <>
+                {searchArtists.length > 0 && (
+                  <div style={{ marginBottom: '28px' }}>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-primary)' }}>
+                      Artistes
+                    </h3>
+                    <div
+                      className="custom-scrollbar"
+                      style={{
+                        display: 'flex',
+                        gap: '12px',
+                        overflowX: 'auto',
+                        overflowY: 'hidden',
+                        paddingBottom: '8px',
+                        WebkitOverflowScrolling: 'touch',
+                        overscrollBehaviorX: 'contain',
+                        contain: 'content'
+                      }}
+                    >
+                      {searchArtists.map((a) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => openArtistProfile(a.permalinkUrl)}
+                          style={{
+                            flex: '0 0 auto',
+                            width: '112px',
+                            border: 'none',
+                            borderRadius: '14px',
+                            padding: '12px 10px',
+                            cursor: 'pointer',
+                            textAlign: 'center',
+                            backgroundColor: 'rgba(255,255,255,0.06)',
+                            color: 'var(--text-primary)',
+                            WebkitAppRegion: 'no-drag',
+                            contain: 'layout style paint',
+                            isolation: 'isolate'
+                          }}
+                        >
+                          <RemoteAvatar
+                            url={a.avatarUrl}
+                            size={72}
+                            variant="list"
+                            wrapperStyle={{ marginBottom: '10px' }}
+                          />
+                          <span className="truncate" style={{ fontSize: '0.82rem', fontWeight: 600, display: 'block' }}>
+                            {a.fullName || a.username}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {tracks.length === 0 && searchArtists.length === 0 ? (
+                  <div className="flex-center" style={{ height: '40vh', color: 'var(--text-secondary)' }}>
+                    <p>Aucun résultat.</p>
+                  </div>
+                ) : tracks.length === 0 ? (
+                  <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '24px' }}>
+                    Aucune piste pour cette recherche.
+                  </p>
+                ) : (
+                  <>
+                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-primary)' }}>
+                      Pistes
+                    </h3>
+                    <TrackList
+                      tracks={tracks}
+                      onPlay={(track, index) => playTrack(track, index, tracks)}
+                      currentTrack={currentTrack}
+                      isAudioPlaying={isAudioPlaying}
+                      favorites={favorites}
+                      toggleFavorite={toggleFavorite}
+                      onTrackDownloaded={handleTrackDownloaded}
+                      onOpenArtist={openArtistFromTrack}
+                    />
+                  </>
+                )}
+              </>
             ) : activeTab === 'downloads' ? (
               downloadsLoading ? (
                 <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
@@ -399,7 +772,7 @@ export default function App() {
             {currentTrack?.artwork ? (
                 <img src={currentTrack.artwork.replace('t500x500', 't300x300')} alt="cover" style={{ width: '220px', height: '220px', borderRadius: '16px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)', pointerEvents: 'none' }} />
             ) : (
-                <div style={{ width: '220px', height: '220px', borderRadius: '16px', backgroundColor: 'rgba(255,255,255,0.1)' }}></div>
+                <TrackArtPlaceholder size={220} radius={16} style={{ boxShadow: '0 10px 30px rgba(0,0,0,0.5)', pointerEvents: 'none' }} />
             )}
         </div>
       )}
@@ -410,14 +783,27 @@ export default function App() {
           <button onClick={(e) => { e.stopPropagation(); setShowLargeCover(false); }} style={{ position: 'absolute', top: '40px', right: '40px', background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', justifyContent: 'center', alignItems: 'center', cursor: 'pointer', color: '#fff' }}>
             <X size={24} />
           </button>
-          <img onClick={(e) => e.stopPropagation()} src={currentTrack.artwork ? currentTrack.artwork.replace('t500x500', 't500x500') : ''} alt="Large Cover" style={{ width: '40vw', height: '40vw', maxWidth: '500px', maxHeight: '500px', borderRadius: '20px', boxShadow: '0 30px 60px rgba(0,0,0,0.6)' }} />
+          {currentTrack.artwork ? (
+            <img
+              onClick={(e) => e.stopPropagation()}
+              src={currentTrack.artwork.replace('t500x500', 't500x500')}
+              alt="Large Cover"
+              style={{ width: '40vw', height: '40vw', maxWidth: '500px', maxHeight: '500px', borderRadius: '20px', boxShadow: '0 30px 60px rgba(0,0,0,0.6)' }}
+            />
+          ) : (
+            <div onClick={(e) => e.stopPropagation()}>
+              <TrackArtPlaceholder size={280} radius={20} style={{ boxShadow: '0 30px 60px rgba(0,0,0,0.6)' }} />
+            </div>
+          )}
         </div>
       )}
 
       {/* Always rendered Player to prevent unmounting! */}
       <Player 
         currentTrack={currentTrack} 
-        onNext={playNext} 
+        onNext={playNextAuto} 
+        onManualNext={playNextManual}
+        playbackManualEpoch={playbackManualEpoch}
         onPrev={playPrev} 
         onError={handleStreamError}
         isMini={isMiniPlayer}
@@ -430,6 +816,7 @@ export default function App() {
         reverbEnabled={reverbEnabled}
         djMode={djMode}
         onPlaybackChange={setIsAudioPlaying}
+        onOpenArtist={openArtistFromTrack}
       />
     </div>
   );
