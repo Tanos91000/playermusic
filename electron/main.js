@@ -2,10 +2,28 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const fs = require('fs');
 const scdl = require('soundcloud-downloader').default;
 const { autoUpdater } = require('electron-updater');
+const yts = require('yt-search');
+const ytdl = require('@distube/ytdl-core');
 
 let mainWindow;
+const downloadsDir = path.join(app.getPath('userData'), 'downloads');
+const downloadsFile = path.join(app.getPath('userData'), 'downloads.json');
+
+if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+
+function getDownloads() {
+  if (!fs.existsSync(downloadsFile)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(downloadsFile, 'utf8'));
+  } catch (e) { return {}; }
+}
+
+function saveDownloads(data) {
+  fs.writeFileSync(downloadsFile, JSON.stringify(data, null, 2));
+}
 
 // Tiny local server to proxy SoundCloud streams (replaces Next.js API route)
 const server = http.createServer(async (req, res) => {
@@ -15,6 +33,16 @@ const server = http.createServer(async (req, res) => {
   if (!url) {
     res.statusCode = 400;
     return res.end('Missing url parameter');
+  }
+
+  // Handle local file serving
+  if (url.startsWith('file://')) {
+    const filePath = url.replace('file://', '');
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Content-Type', 'audio/mpeg');
+      return fs.createReadStream(filePath).pipe(res);
+    }
   }
 
   try {
@@ -132,9 +160,12 @@ ipcMain.handle('search-soundcloud', async (event, query) => {
       limit: 30
     });
 
+    const downloads = getDownloads();
+
     return searchResults.collection
       .map(track => {
-        const isUnavailable = track.policy === 'BLOCK' || track.policy === 'SNIP' || track.policy === 'MONETIZE';
+        const isUnavailable = track.policy === 'BLOCK' || track.policy === 'SNIP';
+        const localPath = downloads[track.id];
         return {
           id: track.id,
           title: track.title,
@@ -142,13 +173,49 @@ ipcMain.handle('search-soundcloud', async (event, query) => {
           duration: track.duration, // in ms
           artwork: track.artwork_url ? track.artwork_url.replace('large', 't500x500') : null,
           url: track.permalink_url,
-          unavailable: isUnavailable
+          unavailable: isUnavailable && !localPath,
+          isFixed: !!localPath,
+          localPath: localPath
         };
       });
   } catch (error) {
     console.error('Search error in IPC:', error);
     throw error;
   }
+});
+
+ipcMain.handle('download-track', async (event, track) => {
+  try {
+    const query = `${track.artist} - ${track.title}`;
+    const r = await yts(query);
+    const video = r.videos[0];
+    if (!video) throw new Error('No match found on YouTube');
+
+    const fileName = `${track.id}.mp3`;
+    const filePath = path.join(downloadsDir, fileName);
+
+    const stream = ytdl(video.url, { quality: 'highestaudio', filter: 'audioonly' });
+    const fileStream = fs.createWriteStream(filePath);
+
+    return new Promise((resolve, reject) => {
+      stream.pipe(fileStream);
+      fileStream.on('finish', () => {
+        const downloads = getDownloads();
+        downloads[track.id] = filePath;
+        saveDownloads(downloads);
+        resolve({ success: true, localPath: filePath });
+      });
+      fileStream.on('error', reject);
+      stream.on('error', reject);
+    });
+  } catch (error) {
+    console.error('Download error:', error);
+    throw error;
+  }
+});
+
+ipcMain.handle('get-downloaded-tracks', () => {
+  return getDownloads();
 });
 
 ipcMain.handle('get-app-version', () => {

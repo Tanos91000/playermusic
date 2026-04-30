@@ -147,12 +147,28 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
   }, [reverb, reverbEnabled]);
 
   useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying]); // Depend on isPlaying to have correct state in closure if needed, though getActiveAudio uses refs
+
+  useEffect(() => {
     if (!currentTrack || !audioCtxRef.current) return;
     
     setIsPlaying(true);
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
 
-    const streamUrl = `http://localhost:3006/?url=${encodeURIComponent(currentTrack.url)}`;
+    // Use localPath if available, otherwise SoundCloud proxy
+    const finalUrl = currentTrack.localPath 
+      ? `http://localhost:3006/?url=${encodeURIComponent('file://' + currentTrack.localPath)}`
+      : `http://localhost:3006/?url=${encodeURIComponent(currentTrack.url)}`;
+
+    const streamUrl = finalUrl;
     const newDeck = activeDeck === 'A' ? 'B' : 'A';
     const activeAudio = activeDeck === 'A' ? audioARef.current : audioBRef.current;
     const nextAudio = activeDeck === 'A' ? audioBRef.current : audioARef.current;

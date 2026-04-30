@@ -16,6 +16,19 @@ export default function App() {
   const [djMode, setDjMode] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null); // 'available', 'downloaded', null
 
+  const refreshFavoritesWithDownloads = async (favs) => {
+    try {
+      const downloads = await window.electronAPI.getDownloadedTracks();
+      const enriched = favs.map(f => {
+        if (downloads[f.id]) {
+          return { ...f, localPath: downloads[f.id], unavailable: false, isFixed: true };
+        }
+        return f;
+      });
+      setFavorites(enriched);
+    } catch (e) { console.error('Failed to enrich favorites', e); }
+  };
+
   useEffect(() => {
     if (window.electronAPI?.onUpdateAvailable) {
       window.electronAPI.onUpdateAvailable(() => setUpdateStatus('available'));
@@ -35,7 +48,9 @@ export default function App() {
     const saved = localStorage.getItem('aura_favorites');
     if (saved) {
       try {
-        setFavorites(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        setFavorites(parsed);
+        refreshFavoritesWithDownloads(parsed);
       } catch (e) { console.error('Failed to parse favorites'); }
     }
     const savedEq = localStorage.getItem('aura_eq_bands');

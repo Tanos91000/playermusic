@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   searchSoundCloud: (query) => ipcRenderer.invoke('search-soundcloud', query),
   resizeWindow: (width, height, isMini) => ipcRenderer.invoke('resize-window', { width, height, isMini }),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  downloadTrack: (track) => ipcRenderer.invoke('download-track', track),
+  getDownloadedTracks: () => ipcRenderer.invoke('get-downloaded-tracks'),
   onUpdateAvailable: (callback) => {
     ipcRenderer.removeAllListeners('update-available');
     ipcRenderer.on('update-available', callback);
