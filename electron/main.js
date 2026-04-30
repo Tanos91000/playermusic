@@ -340,5 +340,25 @@ ipcMain.handle('get-app-version', () => {
 });
 
 ipcMain.handle('restart-app', () => {
-  autoUpdater.quitAndInstall();
+  // macOS electron-updater (MacUpdater): if Squirrel never emitted native "update-downloaded",
+  // quitAndInstall() does NOT call checkForUpdates() while autoInstallOnAppQuit is true → click does nothing.
+  if (process.platform === 'darwin') {
+    autoUpdater.autoInstallOnAppQuit = false;
+  }
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
+    }
+    mainWindow = null;
+  } catch {
+    /* ignore */
+  }
+  setImmediate(() => {
+    try {
+      autoUpdater.quitAndInstall();
+    } catch (err) {
+      console.error('[Aura] quitAndInstall:', err);
+      app.quit();
+    }
+  });
 });
