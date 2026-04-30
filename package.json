@@ -1,7 +1,9 @@
 {
   "name": "playermusic",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "private": true,
+  "description": "Aura Player — SoundCloud desktop player with downloads",
+  "author": "TanosVape",
   "main": "electron/main.js",
   "scripts": {
     "ensure:ytdlp": "node scripts/ensure-ytdlp-standalone.js",
@@ -46,6 +48,7 @@
     "mac": {
       "identity": null,
       "category": "public.app-category.music",
+      "icon": "icon.icns",
       "target": [
         "dmg",
         "zip"
@@ -55,6 +58,7 @@
       "target": [
         "nsis"
       ],
+      "icon": "icon.ico",
       "signAndEditExecutable": false,
       "verifyUpdateCodeSignature": false
     }
