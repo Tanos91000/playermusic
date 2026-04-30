@@ -196,22 +196,30 @@ ipcMain.handle('download-track', async (event, track) => {
   try {
     console.log(`Starting download for: ${track.artist} - ${track.title}`);
     const query = `${track.artist} - ${track.title}`;
-    const r = await yts(query);
-    const video = r.videos[0];
-    if (!video) throw new Error('No match found on YouTube');
+    
+    // Using play.search for better compatibility with play.stream
+    const searchResults = await play.search(query, { limit: 1, source: { youtube: 'video' } });
+    const video = searchResults[0];
+    
+    if (!video || !video.url) {
+      console.error('No YouTube match found for:', query);
+      throw new Error('No match found on YouTube');
+    }
+
+    console.log(`Found YouTube video: ${video.title} (${video.url})`);
 
     const fileName = `${track.id}.mp3`;
     const filePath = path.join(downloadsDir, fileName);
 
     if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1024) {
+      console.log('File already exists, skipping download');
       const downloads = getDownloads();
       downloads[track.id] = filePath;
       saveDownloads(downloads);
       return { success: true, localPath: filePath };
     }
 
-    // Using play-dl which is currently much more stable than ytdl-core
-    const stream = await play.stream(video.url, { quality: 2 }); // highestaudio equivalent
+    const stream = await play.stream(video.url, { quality: 2 });
     const fileStream = fs.createWriteStream(filePath);
 
     return new Promise((resolve, reject) => {
@@ -231,8 +239,10 @@ ipcMain.handle('download-track', async (event, track) => {
       const handleError = (err) => {
         if (hasError) return;
         hasError = true;
-        console.error('Stream/File error:', err);
-        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        console.error('Download stream error:', err);
+        if (fs.existsSync(filePath)) {
+          try { fs.unlinkSync(filePath); } catch(e) {}
+        }
         reject(err);
       };
 
@@ -240,7 +250,7 @@ ipcMain.handle('download-track', async (event, track) => {
       stream.stream.on('error', handleError);
     });
   } catch (error) {
-    console.error('Download error:', error);
+    console.error('Download error handler:', error);
     throw error;
   }
 });
