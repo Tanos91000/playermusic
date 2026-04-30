@@ -146,16 +146,33 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
     }
   }, [reverb, reverbEnabled]);
 
+  const togglePlayRef = useRef();
+  togglePlayRef.current = () => {
+    const audio = getActiveAudio();
+    if (audio) {
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
+      if (isPlaying) {
+        audio.pause();
+        cancelAnimationFrame(requestRef.current);
+      } else {
+        audio.play();
+        requestRef.current = requestAnimationFrame(updateProgress);
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.code === 'Space') {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
         e.preventDefault();
-        togglePlay();
+        togglePlayRef.current();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlaying]); // Depend on isPlaying to have correct state in closure if needed, though getActiveAudio uses refs
+  }, []); 
 
   useEffect(() => {
     if (!currentTrack || !audioCtxRef.current) return;
@@ -164,6 +181,7 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
     if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
 
     // Use localPath if available, otherwise SoundCloud proxy
+    // Ensure the URL is correctly formed for the proxy
     const finalUrl = currentTrack.localPath 
       ? `http://localhost:3006/?url=${encodeURIComponent('file://' + currentTrack.localPath)}`
       : `http://localhost:3006/?url=${encodeURIComponent(currentTrack.url)}`;
@@ -210,20 +228,7 @@ export default function Player({ currentTrack, onNext, onPrev, onError, isMini, 
     setActiveDeck(newDeck);
   }, [currentTrack]);
 
-  const togglePlay = () => {
-    const audio = getActiveAudio();
-    if (audio) {
-      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
-      if (isPlaying) {
-        audio.pause();
-        cancelAnimationFrame(requestRef.current);
-      } else {
-        audio.play();
-        requestRef.current = requestAnimationFrame(updateProgress);
-      }
-      setIsPlaying(!isPlaying);
-    }
-  };
+  const togglePlay = () => togglePlayRef.current();
 
   const handleVolumeChange = (e) => {
     const val = parseFloat(e.target.value);

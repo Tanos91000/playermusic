@@ -37,11 +37,18 @@ const server = http.createServer(async (req, res) => {
 
   // Handle local file serving
   if (url.startsWith('file://')) {
-    const filePath = url.replace('file://', '');
+    const decodedUrl = decodeURIComponent(url);
+    const filePath = decodedUrl.replace('file://', '');
     if (fs.existsSync(filePath)) {
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Content-Type', 'audio/mpeg');
+      const stats = fs.statSync(filePath);
+      res.setHeader('Content-Length', stats.size);
       return fs.createReadStream(filePath).pipe(res);
+    } else {
+      console.error('Local file not found:', filePath);
+      res.statusCode = 404;
+      return res.end('File not found');
     }
   }
 
@@ -186,6 +193,7 @@ ipcMain.handle('search-soundcloud', async (event, query) => {
 
 ipcMain.handle('download-track', async (event, track) => {
   try {
+    console.log(`Starting download for: ${track.artist} - ${track.title}`);
     const query = `${track.artist} - ${track.title}`;
     const r = await yts(query);
     const video = r.videos[0];
@@ -194,19 +202,51 @@ ipcMain.handle('download-track', async (event, track) => {
     const fileName = `${track.id}.mp3`;
     const filePath = path.join(downloadsDir, fileName);
 
-    const stream = ytdl(video.url, { quality: 'highestaudio', filter: 'audioonly' });
+    // If file already exists, just return it
+    if (fs.existsSync(filePath) && fs.statSync(filePath).size > 1024) {
+      const downloads = getDownloads();
+      downloads[track.id] = filePath;
+      saveDownloads(downloads);
+      return { success: true, localPath: filePath };
+    }
+
+    const stream = ytdl(video.url, { 
+      quality: 'highestaudio', 
+      filter: 'audioonly',
+      // Adding some headers can help with ytdl-core stability
+      requestOptions: {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+      }
+    });
+
     const fileStream = fs.createWriteStream(filePath);
 
     return new Promise((resolve, reject) => {
       stream.pipe(fileStream);
+      
+      let hasError = false;
       fileStream.on('finish', () => {
-        const downloads = getDownloads();
-        downloads[track.id] = filePath;
-        saveDownloads(downloads);
-        resolve({ success: true, localPath: filePath });
+        if (!hasError) {
+          console.log(`Download finished: ${filePath}`);
+          const downloads = getDownloads();
+          downloads[track.id] = filePath;
+          saveDownloads(downloads);
+          resolve({ success: true, localPath: filePath });
+        }
       });
-      fileStream.on('error', reject);
-      stream.on('error', reject);
+
+      const handleError = (err) => {
+        if (hasError) return;
+        hasError = true;
+        console.error('Stream/File error:', err);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath); // Clean up partial file
+        reject(err);
+      };
+
+      fileStream.on('error', handleError);
+      stream.on('error', handleError);
     });
   } catch (error) {
     console.error('Download error:', error);

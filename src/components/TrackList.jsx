@@ -20,14 +20,13 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
     try {
       const res = await window.electronAPI.downloadTrack(track);
       if (res.success) {
-        // We notify the parent that data has changed (simplest is to just re-search or refresh)
-        // But for better UX we just update the local object for now
         track.unavailable = false;
         track.isFixed = true;
         track.localPath = res.localPath;
       }
     } catch (err) {
       console.error('Failed to download track:', err);
+      alert('Erreur lors du téléchargement. Réessaie plus tard.');
     } finally {
       setDownloadingIds(prev => {
         const next = new Set(prev);
@@ -50,6 +49,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
         const isFav = (favorites || []).find(f => f.id === track.id);
         const isUnavailable = track.unavailable;
         const isDownloading = downloadingIds.has(track.id);
+        const isFixed = track.isFixed;
         
         return (
           <div 
@@ -91,7 +91,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
                 <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: isPlaying ? 600 : 500, color: isPlaying ? 'var(--accent-color)' : (isUnavailable ? '#ff4d4d' : 'var(--text-primary)') }}>
                   {track.title}
                 </h4>
-                {track.isFixed && <Check size={14} color="var(--accent-color)" />}
+                {isFixed && <Check size={14} color="var(--accent-color)" />}
                 {isUnavailable && !isDownloading && <span style={{ fontSize: '0.75rem', fontWeight: 'normal', color: '#ff4d4d' }}>(Non disponible)</span>}
               </div>
               <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -99,38 +99,46 @@ export default function TrackList({ tracks, onPlay, currentTrack, favorites, tog
               </p>
             </div>
             
-            {isUnavailable ? (
-              <button 
-                onClick={(e) => handleDownload(e, track)}
-                disabled={isDownloading}
-                style={{ 
-                  background: isDownloading ? 'transparent' : 'var(--accent-color)', 
-                  color: 'white', 
-                  border: 'none', 
-                  borderRadius: '20px', 
-                  padding: '5px 12px', 
-                  fontSize: '0.75rem', 
-                  fontWeight: 600, 
-                  cursor: isDownloading ? 'default' : 'pointer',
-                  marginRight: '15px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px'
-                }}
-              >
-                {isDownloading ? 'Récupération...' : <><Download size={14} /> Récupérer</>}
-              </button>
-            ) : (
-              <button 
-                onClick={(e) => toggleFavorite(track, e)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: isFav ? 'var(--accent-color)' : 'var(--text-secondary)', marginRight: '20px', transition: 'transform 0.1s' }}
-              >
-                <Heart size={20} fill={isFav ? "currentColor" : "none"} />
-              </button>
-            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {!isFixed && (
+                <button 
+                  onClick={(e) => handleDownload(e, track)}
+                  disabled={isDownloading}
+                  title={isUnavailable ? "Récupérer le son (Fix)" : "Télécharger localement"}
+                  style={{ 
+                    background: isDownloading ? 'transparent' : (isUnavailable ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)'), 
+                    color: 'white', 
+                    border: 'none', 
+                    borderRadius: '20px', 
+                    padding: '5px 12px', 
+                    fontSize: '0.75rem', 
+                    fontWeight: 600, 
+                    cursor: isDownloading ? 'default' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '5px'
+                  }}
+                >
+                  {isDownloading ? (
+                    <><Loader2 size={14} className="animate-spin" /> ...</>
+                  ) : (
+                    <><Download size={14} /> {isUnavailable ? 'Récupérer' : 'Download'}</>
+                  )}
+                </button>
+              )}
 
-            <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-              {formatDuration(track.duration)}
+              {!isUnavailable && (
+                <button 
+                  onClick={(e) => toggleFavorite(track, e)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: isFav ? 'var(--accent-color)' : 'var(--text-secondary)', transition: 'transform 0.1s' }}
+                >
+                  <Heart size={20} fill={isFav ? "currentColor" : "none"} />
+                </button>
+              )}
+
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', width: '50px', textAlign: 'right' }}>
+                {formatDuration(track.duration)}
+              </div>
             </div>
           </div>
         );
