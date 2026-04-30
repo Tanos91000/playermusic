@@ -1,16 +1,17 @@
 {
   "name": "playermusic",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
     "ensure:ytdlp": "node scripts/ensure-ytdlp-standalone.js",
     "postinstall": "node scripts/ensure-ytdlp-standalone.js",
     "dev": "concurrently -k \"vite\" \"sh scripts/electron-when-vite-ready.sh\"",
-    "build": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder",
-    "build:mac": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron + DMG — analyse node_modules puis packaging, souvent sans nouveau log pendant des minutes.\\n')\" && node -e \"require('node:fs').rmSync('dist-electron',{recursive:true,force:true});\" && cross-env CI=true CSC_IDENTITY_AUTO_DISCOVERY=false DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --mac --publish never",
-    "build:win": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --win --publish never",
-    "publish:github": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node -e \"console.log('\\n▸ Étape Electron (electron-builder) — peut rester silencieux plusieurs minutes.\\n')\" && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --publish always",
+    "build": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node scripts/log-packaging.js && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder",
+    "build:mac": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node scripts/log-packaging.js && node scripts/rm-dist-electron.js && cross-env CI=true CSC_IDENTITY_AUTO_DISCOVERY=false DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --mac --publish never",
+    "build:win": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node scripts/log-packaging.js && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --win --publish never",
+    "publish:github:mac": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node scripts/log-packaging.js && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --mac --publish always",
+    "publish:github:win": "node scripts/ensure-ytdlp-standalone.js && node scripts/clean-macos-xattrs.js && vite build && node scripts/log-packaging.js && cross-env DEBUG= NM_DEBUG_LEVEL=-1 electron-builder --win --publish always",
     "start": "electron .",
     "lint": "eslint"
   },
@@ -50,7 +51,9 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "signAndEditExecutable": false,
+      "verifyUpdateCodeSignature": false
     }
   },
   "dependencies": {
