@@ -1,6 +1,6 @@
 {
   "name": "playermusic",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
@@ -19,7 +19,8 @@
     "appId": "com.emric.playermusic",
     "productName": "Aura Player",
     "directories": {
-      "output": "dist-electron"
+      "output": "dist-electron",
+      "buildResources": "icons"
     },
     "npmRebuild": false,
     "files": [
@@ -44,8 +45,10 @@
     ],
     "mac": {
       "identity": null,
+      "category": "public.app-category.music",
       "target": [
-        "dmg"
+        "dmg",
+        "zip"
       ]
     },
     "win": {

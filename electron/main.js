@@ -117,6 +117,51 @@ server.on('error', (e) => {
   }
 });
 
+let pendingUpdateAvailable = false;
+let pendingUpdateDownloaded = false;
+
+function flushUpdaterStatusToRenderer() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const wc = mainWindow.webContents;
+  if (!wc || wc.isDestroyed()) return;
+  if (pendingUpdateDownloaded) wc.send('update-downloaded', {});
+  else if (pendingUpdateAvailable) wc.send('update-available', {});
+}
+
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('error', (err) => {
+    console.error('[Aura] autoUpdater:', err?.message || err);
+  });
+  autoUpdater.on('checking-for-update', () => {
+    console.log('[Aura] autoUpdater: checking…');
+  });
+  autoUpdater.on('update-not-available', () => {
+    console.log('[Aura] autoUpdater: up to date');
+  });
+
+  autoUpdater.on('update-available', (info) => {
+    pendingUpdateAvailable = true;
+    console.log('[Aura] autoUpdater: update available', info?.version);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-available', info);
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    pendingUpdateDownloaded = true;
+    console.log('[Aura] autoUpdater: update downloaded', info?.version);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update-downloaded', info);
+  });
+
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+      console.error('[Aura] autoUpdater check failed:', err?.message || err);
+    });
+  }, 5000);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -128,6 +173,10 @@ function createWindow() {
       contextIsolation: true,
       webSecurity: false,
     },
+  });
+
+  mainWindow.webContents.once('did-finish-load', () => {
+    flushUpdaterStatusToRenderer();
   });
 
   // Dev: use 127.0.0.1 so it matches Vite (localhost → IPv6-only mismatch causes endless load on some macOS setups)
@@ -166,19 +215,8 @@ app.whenReady().then(() => {
   });
 
   createWindow();
-  
-  // Check for updates after a delay to ensure fast startup
-  setTimeout(() => {
-    autoUpdater.checkForUpdatesAndNotify();
-  }, 5000);
 
-  autoUpdater.on('update-available', (info) => {
-    if (mainWindow) mainWindow.webContents.send('update-available', info);
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    if (mainWindow) mainWindow.webContents.send('update-downloaded', info);
-  });
+  setupAutoUpdater();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -272,6 +272,55 @@ export default function App() {
       {/* Dynamic Background */}
       <AnimatedBackground imageUrl={currentTrack?.artwork} />
 
+      {updateStatus && (
+        <div
+          className="glass animate-fade-in"
+          style={{
+            position: 'fixed',
+            top: 14,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 100,
+            maxWidth: 'min(560px, calc(100vw - 28px))',
+            width: '100%',
+            padding: '12px 18px',
+            borderRadius: '14px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '12px',
+            backgroundColor: 'rgba(255, 255, 255, 0.12)',
+            WebkitAppRegion: 'no-drag',
+            boxSizing: 'border-box'
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <span style={{ fontWeight: 'bold' }}>Mise à jour {updateStatus === 'downloaded' ? 'prête !' : 'disponible...'}</span>
+            <span style={{ marginLeft: '10px', color: 'var(--text-secondary)' }}>
+              {updateStatus === 'downloaded' ? 'La nouvelle version est prête à être installée.' : 'Téléchargement en cours...'}
+            </span>
+          </div>
+          {updateStatus === 'downloaded' && (
+            <button
+              type="button"
+              onClick={() => window.electronAPI.restartApp()}
+              style={{
+                background: 'var(--accent-color)',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                cursor: 'pointer',
+                fontWeight: 600,
+                flexShrink: 0
+              }}
+            >
+              Redémarrer
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Main Full UI */}
       {!isMiniPlayer && (
         <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '40px 20px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -302,25 +351,6 @@ export default function App() {
                 )}
             </div>
           </header>
-
-          {updateStatus && (
-            <div className="glass" style={{ marginBottom: '20px', padding: '15px 20px', borderRadius: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(255, 255, 255, 0.1)' }}>
-              <div>
-                <span style={{ fontWeight: 'bold' }}>Mise à jour {updateStatus === 'downloaded' ? 'prête !' : 'disponible...'}</span>
-                <span style={{ marginLeft: '10px', color: 'var(--text-secondary)' }}>
-                  {updateStatus === 'downloaded' ? 'La nouvelle version est prête à être installée.' : 'Téléchargement en cours...'}
-                </span>
-              </div>
-              {updateStatus === 'downloaded' && (
-                <button 
-                  onClick={() => window.electronAPI.restartApp()}
-                  style={{ background: 'var(--accent-color)', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '20px', cursor: 'pointer', fontWeight: 600 }}
-                >
-                  Redémarrer
-                </button>
-              )}
-            </div>
-          )}
 
           <main style={{ flex: 1, overflowY: 'auto', paddingRight: '10px', paddingBottom: '120px', WebkitAppRegion: 'no-drag' }}>
             {activeTab === 'settings' ? (
