@@ -1,0 +1,21 @@
+INSTALLATION — Aura Player (simple)
+
+--- MAC ---
+1) Ouvre le DMG, glisse "Aura Player" dans Applications.
+2) Ouvre Terminal (Spotlight : Terminal).
+3) Colle cette ligne, puis Entree :
+
+   xattr -cr "/Applications/Aura Player.app"
+
+4) Rouvre Aura Player. Si macOS bloque : clic droit sur l'app > Ouvrir.
+
+(Pourquoi ? Les apps telechargees depuis Internet sont bloquees sans signature Apple payante.)
+
+--- WINDOWS ---
+1) Sur GitHub > Releases, telecharge le fichier .exe (setup NSIS).
+2) Double-clic pour installer.
+
+Si Windows SmartScreen bloque : "Informations complementaires" > "Executer quand meme".
+
+--- Releases ---
+Tu dois voir un .dmg (Mac) ET un .exe (Windows) sur la meme page Release quand les deux jobs CI sont verts.
