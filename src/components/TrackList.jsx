@@ -1,12 +1,24 @@
-import { Heart, AlertCircle, Download, Check, Loader2 } from 'lucide-react';
-import { useState } from 'react';
+import { Heart, AlertCircle, Download, Check, Loader2, MoreVertical, Plus } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
 import PlayingIndicator from './PlayingIndicator';
 import { TrackArtPlaceholder } from './MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
 import { formatStreamCount } from '../utils/formatPlayback';
 
-export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded, onOpenArtist }) {
+export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded, onOpenArtist, playlists = [], onAddToPlaylist }) {
   const [downloadingIds, setDownloadingIds] = useState(new Set());
+  const [menuOpenId, setMenuOpenId] = useState(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) {
+        setMenuOpenId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   if (!tracks || tracks.length === 0) {
     return (
@@ -86,6 +98,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
         const isUnavailable = track.unavailable;
         const isDownloading = downloadingIds.has(track.id);
         const isFixed = track.isFixed;
+        const isLocalFile = !!track.isLocalFile;
         const canOpenArtist = typeof onOpenArtist === 'function' && !!resolveArtistPermalinkUrl(track);
 
         if (isUnavailable) {
@@ -224,7 +237,10 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
               transition: 'all 0.2s ease',
               backgroundColor: isCurrentTrack ? 'var(--surface-hover)' : 'var(--surface-color)',
               borderColor: isCurrentTrack ? 'var(--accent-color)' : 'var(--border-color)',
-              animationDelay: `${index * 0.05}s`
+              animationDelay: `${index * 0.05}s`,
+              overflow: 'visible',
+              position: 'relative',
+              zIndex: menuOpenId === track.id ? 50 : 1
             }}
             onMouseEnter={(e) => {
               if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
@@ -272,7 +288,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 >
                   {track.title}
                 </h4>
-                {isFixed && <Check size={14} color="var(--accent-color)" />}
+                {isFixed && !isLocalFile && <Check size={14} color="var(--accent-color)" />}
               </div>
               <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
                 {onOpenArtist && canOpenArtist ? (
@@ -303,7 +319,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              {!isFixed && (
+              {!isFixed && !isLocalFile && (
                 <button
                   type="button"
                   onClick={(e) => handleDownload(e, track)}
@@ -332,7 +348,11 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                   border: 'none',
                   cursor: 'pointer',
                   color: isFav ? 'var(--accent-color)' : 'var(--text-secondary)',
-                  transition: 'transform 0.1s'
+                  transition: 'transform 0.1s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '4px'
                 }}
               >
                 <Heart size={20} fill={isFav ? 'currentColor' : 'none'} />
@@ -348,6 +368,57 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                   </div>
                 ) : null}
               </div>
+
+              {playlists.length > 0 && (
+                <div style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMenuOpenId(menuOpenId === track.id ? null : track.id);
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px' }}
+                  >
+                    <MoreVertical size={20} />
+                  </button>
+                  
+                  {menuOpenId === track.id && (
+                    <div 
+                      ref={menuRef}
+                      className="glass animate-fade-in"
+                      style={{
+                        position: 'absolute', right: '0', top: '100%', marginTop: '8px', zIndex: 50,
+                        background: 'rgba(30, 30, 36, 0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                        borderRadius: '12px', padding: '8px', minWidth: '180px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
+                      }}
+                    >
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '4px 8px', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+                        Ajouter à...
+                      </div>
+                      {playlists.map(pl => (
+                        <button
+                          key={pl.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddToPlaylist(pl.id, track);
+                            setMenuOpenId(null);
+                          }}
+                          style={{
+                            display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
+                            color: 'var(--text-primary)', padding: '8px', borderRadius: '6px', cursor: 'pointer',
+                            fontSize: '0.9rem', transition: 'background 0.2s'
+                          }}
+                          onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
+                          onMouseOut={e => e.currentTarget.style.background = 'none'}
+                        >
+                          {pl.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );

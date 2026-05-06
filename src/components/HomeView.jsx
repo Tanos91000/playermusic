@@ -1,4 +1,5 @@
-import { Compass, Download as DownloadIcon, Heart, Search, Play } from 'lucide-react';
+import { useMemo } from 'react';
+import { Play } from 'lucide-react';
 import PlayingIndicator from './PlayingIndicator';
 import { TrackArtPlaceholder } from './MediaPlaceholder';
 import { formatStreamCount } from '../utils/formatPlayback';
@@ -201,7 +202,8 @@ export default function HomeView({
   onPlay,
   onNavigateSearch,
   onNavigateFavorites,
-  onNavigateDownloads
+  onNavigateDownloads,
+  onNavigateLocal
 }) {
   const favSlice = (favorites || []).slice(0, 12);
   const dlSlice = (downloadTracks || []).slice(0, 12);
@@ -229,6 +231,21 @@ export default function HomeView({
     }
   }
 
+  const recommendedList = useMemo(() => {
+    const list = [];
+    const pool = [...(favorites || []), ...(recentTracks || [])];
+    const shuffled = pool.sort(() => 0.5 - Math.random());
+    const seen = new Set(quickPlayIds);
+    for (const t of shuffled) {
+      if (list.length >= 12) break;
+      if (!seen.has(t.id)) {
+        list.push(t);
+        seen.add(t.id);
+      }
+    }
+    return list;
+  }, [favorites, recentTracks]); // re-shuffle when favorites or recents update
+
   return (
     <div className="animate-fade-in" style={{ paddingBottom: '40px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '24px' }}>
@@ -241,7 +258,7 @@ export default function HomeView({
         <div 
           style={{ 
             display: 'grid', 
-            gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', 
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', 
             gap: '12px',
             marginBottom: '48px'
           }}
@@ -258,6 +275,22 @@ export default function HomeView({
             />
           ))}
         </div>
+      )}
+
+      {recommendedList.length > 0 && (
+        <HorizontalRow title="Recommandé pour vous" subtitle="Basé sur ce que tu écoutes">
+          {recommendedList.map((track, index) => (
+            <TrackCard
+              key={track.id}
+              track={track}
+              index={index}
+              list={recommendedList}
+              onPlay={onPlay}
+              currentTrack={currentTrack}
+              isAudioPlaying={isAudioPlaying}
+            />
+          ))}
+        </HorizontalRow>
       )}
 
       {recentTracks?.length > 0 && (
@@ -313,22 +346,41 @@ export default function HomeView({
 
       {!recentTracks?.length && !favSlice.length && !dlSlice.length && (
         <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '48px 20px' }}>
-          <p style={{ marginBottom: '16px' }}>Commence par une recherche ou ajoute des favoris.</p>
-          <button
-            type="button"
-            onClick={onNavigateSearch}
-            style={{
-              padding: '12px 28px',
-              borderRadius: '999px',
-              border: 'none',
-              background: 'var(--accent-color)',
-              color: '#fff',
-              fontWeight: 700,
-              cursor: 'pointer'
-            }}
-          >
-            Explorer SoundCloud
-          </button>
+          <p style={{ marginBottom: '16px' }}>Commence par l&apos;onglet Fichiers locaux, une recherche SoundCloud ou des favoris.</p>
+          <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            {typeof onNavigateLocal === 'function' && (
+              <button
+                type="button"
+                onClick={onNavigateLocal}
+                style={{
+                  padding: '12px 28px',
+                  borderRadius: '999px',
+                  border: 'none',
+                  background: 'rgba(255,255,255,0.12)',
+                  color: 'var(--text-primary)',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                Fichiers locaux
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onNavigateSearch}
+              style={{
+                padding: '12px 28px',
+                borderRadius: '999px',
+                border: 'none',
+                background: 'var(--accent-color)',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              Explorer SoundCloud
+            </button>
+          </div>
         </div>
       )}
     </div>

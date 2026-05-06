@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Heart, Minimize2, Maximize2, Image as ImageIcon, Repeat } from 'lucide-react';
+import { Play, Pause, SkipForward, SkipBack, Volume2, VolumeX, Heart, Minimize2, Maximize2, Image as ImageIcon, Repeat, Mic2 } from 'lucide-react';
 import { TrackArtPlaceholder } from './MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
 import { formatStreamCount } from '../utils/formatPlayback';
+import LyricsModal from './LyricsModal';
 
 function prepareAudioElementForSrc(audio, url) {
   if (!audio || !url) return;
@@ -61,6 +62,7 @@ export default function Player({
   onOpenArtist
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showLyrics, setShowLyrics] = useState(false);
   const [progress, setProgress] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
@@ -211,14 +213,45 @@ export default function Player({
     const audio = getActiveAudio();
     if (audio) {
       if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
+      
+      const targetVol = isMuted ? 0 : volume;
+      const fadeStep = 0.05;
+      const fadeInterval = 10;
+      
       if (isPlaying) {
-        audio.pause();
+        setIsPlaying(false);
         cancelAnimationFrame(requestRef.current);
+        
+        let v = audio.volume;
+        const fadeOut = setInterval(() => {
+          v = Math.max(0, v - fadeStep);
+          audio.volume = v;
+          if (v <= 0) {
+            clearInterval(fadeOut);
+            audio.pause();
+            audio.volume = targetVol; // Restore for next play
+          }
+        }, fadeInterval);
       } else {
-        audio.play();
+        setIsPlaying(true);
         requestRef.current = requestAnimationFrame(updateProgress);
+        
+        audio.volume = 0;
+        audio.play().then(() => {
+          let v = 0;
+          const fadeIn = setInterval(() => {
+            v = Math.min(targetVol, v + fadeStep);
+            audio.volume = v;
+            if (v >= targetVol) {
+              clearInterval(fadeIn);
+            }
+          }, fadeInterval);
+        }).catch(err => {
+          console.error("Play failed", err);
+          setIsPlaying(false);
+          audio.volume = targetVol;
+        });
       }
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -452,7 +485,7 @@ export default function Player({
       <audio ref={audioBRef} onEnded={handleEnded} onError={handleAudioError} />
 
       {currentTrack && isMini && (
-        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', WebkitAppRegion: 'no-drag', zIndex: 100, pointerEvents: 'auto' }}>
+        <div className="glass-panel" style={{ position: 'absolute', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%', WebkitAppRegion: 'no-drag', zIndex: 100, pointerEvents: 'auto', transform: 'translateZ(0)' }}>
           <h4 className="truncate" style={{ margin: '0 0 5px 0', fontSize: '1rem', fontWeight: 600, width: '100%', textAlign: 'center' }}>{currentTrack.title}</h4>
           <div style={{ margin: '0 0 15px 0', width: '100%', WebkitAppRegion: 'no-drag', position: 'relative', zIndex: 5, pointerEvents: 'auto' }}>
             {renderArtistLabel('center')}
@@ -488,7 +521,7 @@ export default function Player({
       )}
 
       {currentTrack && !isMini && (
-        <div className="glass-panel" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 50, WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}>
+        <div className="glass-panel" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, padding: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', zIndex: 50, WebkitAppRegion: 'no-drag', pointerEvents: 'auto', transform: 'translateZ(0)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '15px', width: '30%', flexShrink: 0 }}>
             {currentTrack.artwork ? (
               <img src={currentTrack.artwork} alt="cover" style={{ width: '60px', height: '60px', borderRadius: '8px', objectFit: 'cover', flexShrink: 0 }} />
@@ -527,6 +560,9 @@ export default function Player({
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', width: '30%', gap: '15px' }}>
+            <button onClick={() => setShowLyrics(!showLyrics)} title="Paroles" style={{ background: 'none', border: 'none', color: showLyrics ? 'var(--accent-color)' : 'var(--text-secondary)', cursor: 'pointer' }}>
+                <Mic2 size={20} />
+            </button>
             <button onClick={toggleCover} title="Afficher la Cover" style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                 <ImageIcon size={20} />
             </button>
@@ -542,6 +578,13 @@ export default function Player({
             </div>
           </div>
         </div>
+      )}
+      {showLyrics && currentTrack && (
+        <LyricsModal 
+          track={currentTrack} 
+          currentTime={getActiveAudio()?.currentTime || 0} 
+          onClose={() => setShowLyrics(false)} 
+        />
       )}
     </>
   );

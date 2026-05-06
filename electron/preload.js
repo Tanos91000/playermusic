@@ -28,5 +28,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onSpotifyImportProgress: (callback) => {
     ipcRenderer.removeAllListeners('spotify-import-progress');
     ipcRenderer.on('spotify-import-progress', (_event, payload) => callback(payload));
-  }
+  },
+  openLocalAudioFiles: () => ipcRenderer.invoke('open-local-audio-files'),
+  filterExistingLocalPaths: (paths) => ipcRenderer.invoke('filter-existing-local-paths', paths)
 });

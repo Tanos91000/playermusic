@@ -1,6 +1,6 @@
-const { app, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, shell, dialog, Menu } = require('electron');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -22,14 +22,22 @@ const youtubeDl = createYoutubeDlUnpack(path);
 let mainWindow;
 
 function resolveAppIcon() {
+  const iconsRoot = path.join(__dirname, '../icons');
   const candidates = [];
+
   if (process.platform === 'win32') {
     if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'icon.ico'));
-    candidates.push(path.join(__dirname, '../icons/icon.ico'));
-  } else {
+    candidates.push(path.join(iconsRoot, 'icon.ico'));
+  } else if (process.platform === 'darwin') {
     if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'icon.icns'));
-    candidates.push(path.join(__dirname, '../icons/icon.icns'));
+    candidates.push(path.join(iconsRoot, 'icon.icns'));
+  } else {
+    candidates.push(path.join(iconsRoot, 'icon.png'));
+    candidates.push(path.join(iconsRoot, 'icon.ico'));
   }
+
+  candidates.push(path.join(iconsRoot, 'icon.png'));
+
   for (const p of candidates) {
     if (!fs.existsSync(p)) continue;
     const img = nativeImage.createFromPath(p);
@@ -49,6 +57,15 @@ function getAudioContentType(filePath) {
       return 'audio/mp4';
     case '.webm':
       return 'audio/webm';
+    case '.ogg':
+    case '.opus':
+      return 'audio/ogg';
+    case '.flac':
+      return 'audio/flac';
+    case '.wav':
+      return 'audio/wav';
+    case '.aac':
+      return 'audio/aac';
     case '.mp3':
     default:
       return 'audio/mpeg';
@@ -150,8 +167,14 @@ const server = http.createServer(async (req, res) => {
 
   // Handle local file serving (must support Range so <audio> can seek)
   if (url.startsWith('file://')) {
-    const decodedUrl = decodeURIComponent(url);
-    const filePath = decodedUrl.replace('file://', '');
+    let filePath;
+    try {
+      filePath = fileURLToPath(new URL(decodeURIComponent(url)));
+    } catch {
+      const decodedUrl = decodeURIComponent(url);
+      filePath = decodedUrl.replace(/^file:\/\//i, '');
+      if (process.platform === 'win32' && filePath.startsWith('/')) filePath = filePath.slice(1);
+    }
     return serveLocalAudioFile(req, res, filePath);
   }
 
@@ -250,7 +273,9 @@ function createWindow(icon) {
     width: 1200,
     height: 800,
     ...(icon ? { icon } : {}),
-    titleBarStyle: 'hiddenInset', // Native look on macOS
+    // hiddenInset: drag region + traffic lights on macOS; default framed window on Windows/Linux
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -285,6 +310,14 @@ function createWindow(icon) {
 }
 
 app.whenReady().then(() => {
+  // Windows taskbar icon / jump list grouping (must match installer app id)
+  app.setAppUserModelId('com.emric.playermusic');
+
+  // Remove default File / Edit / … menu bar (esp. Windows); keep macOS menu if we add one later
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
+
   ensureDownloadBinariesExecutable(fs, path);
   const ytBin = resolveYtDlpBinaryPath(path);
   if (fs.existsSync(ytBin)) {
@@ -329,11 +362,49 @@ app.on('window-all-closed', () => {
 });
 
 // IPC Handler for window resizing (Mini-player)
-ipcMain.handle('resize-window', (event, { width, height, isMini }) => {
-  if (mainWindow) {
+ipcMain.handle('resize-window', (_event, { width, height, isMini }) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const finish = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.setSize(width, height, true);
-    mainWindow.setAlwaysOnTop(isMini);
+    mainWindow.setAlwaysOnTop(!!isMini);
+    if (isMini) mainWindow.center();
+  };
+
+  if (mainWindow.isFullScreen()) {
+    mainWindow.setFullScreen(false);
+    setTimeout(finish, 120);
+    return;
   }
+
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+    setTimeout(finish, 50);
+    return;
+  }
+
+  finish();
+});
+
+ipcMain.handle('open-local-audio-files', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const { canceled, filePaths } = await dialog.showOpenDialog(win || undefined, {
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      {
+        name: 'Audio',
+        extensions: ['mp3', 'm4a', 'aac', 'wav', 'flac', 'ogg', 'opus', 'webm']
+      }
+    ]
+  });
+  if (canceled || !filePaths?.length) return { canceled: true, paths: [] };
+  return { canceled: false, paths: filePaths };
+});
+
+ipcMain.handle('filter-existing-local-paths', (_event, paths) => {
+  if (!Array.isArray(paths)) return [];
+  return paths.filter((p) => typeof p === 'string' && p.trim() && fs.existsSync(path.normalize(p.trim())));
 });
 
 // IPC Handler for SoundCloud Search (tracks + artists)

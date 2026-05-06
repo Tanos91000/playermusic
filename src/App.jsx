@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Search, Heart, Home, X, Undo2, Download as DownloadIcon, Settings as SettingsIcon } from 'lucide-react';
+import { Search, Heart, Home, X, Undo2, Download as DownloadIcon, Settings as SettingsIcon, FolderOpen, Users, ListMusic } from 'lucide-react';
 import Player from './components/Player';
 import TrackList from './components/TrackList';
 import Settings from './components/Settings';
@@ -7,6 +7,9 @@ import AnimatedBackground from './components/AnimatedBackground';
 import DownloadsView from './components/DownloadsView';
 import HomeView from './components/HomeView';
 import ArtistProfileView from './components/ArtistProfileView';
+import LocalFilesView from './components/LocalFilesView';
+import JamView from './components/JamView';
+import PlaylistsView from './components/PlaylistsView';
 import { TrackArtPlaceholder, RemoteAvatar } from './components/MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from './utils/soundcloudArtist';
 
@@ -16,6 +19,34 @@ const emptyDownloadsLibrary = {
   count: 0,
   totalBytes: 0
 };
+
+const LOCAL_PATHS_STORAGE_KEY = 'aura_local_library_paths';
+
+function localPathToTrack(absPath) {
+  const norm = typeof absPath === 'string' ? absPath.trim() : '';
+  const slashIdx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+  const file = slashIdx >= 0 ? norm.slice(slashIdx + 1) : norm;
+  const title = file.replace(/\.[^/.]+$/, '') || 'Piste locale';
+  return {
+    id: `local:${norm}`,
+    title,
+    artist: 'Fichier local',
+    localPath: norm,
+    url: '',
+    isFixed: false,
+    isLocalFile: true,
+    unavailable: false
+  };
+}
+
+function persistLocalLibraryPaths(tracks) {
+  const paths = tracks.map((t) => t.localPath).filter(Boolean);
+  try {
+    localStorage.setItem(LOCAL_PATHS_STORAGE_KEY, JSON.stringify(paths));
+  } catch {
+    /* ignore */
+  }
+}
 
 function loadRecentTracks() {
   try {
@@ -44,6 +75,7 @@ export default function App() {
   const [artistProfileLoading, setArtistProfileLoading] = useState(false);
   const [favorites, setFavorites] = useState([]);
   const [recentTracks, setRecentTracks] = useState(loadRecentTracks);
+  const [localLibraryTracks, setLocalLibraryTracks] = useState([]);
   const [activeTab, setActiveTab] = useState('home');
   const [eqBands, setEqBands] = useState([0, 0, 0, 0, 0]);
   const [reverb, setReverb] = useState(0);
@@ -52,6 +84,14 @@ export default function App() {
   const [updateStatus, setUpdateStatus] = useState(null); // 'available', 'downloaded', null
   const [downloadsLibrary, setDownloadsLibrary] = useState(emptyDownloadsLibrary);
   const [downloadsLoading, setDownloadsLoading] = useState(false);
+  const [isScrolled, setIsScrolled] = useState(false);
+  const [jamUsername, setJamUsername] = useState(() => localStorage.getItem('aura_jam_username') || '');
+  const [playlists, setPlaylists] = useState(() => {
+    try {
+      const raw = localStorage.getItem('aura_playlists');
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  });
 
   const loadDownloadedLibrary = async () => {
     if (!window.electronAPI?.getDownloadLibrary) return;
@@ -130,6 +170,30 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const api = window.electronAPI;
+        if (!api?.filterExistingLocalPaths) return;
+        const raw = localStorage.getItem(LOCAL_PATHS_STORAGE_KEY);
+        if (!raw) return;
+        const paths = JSON.parse(raw);
+        if (!Array.isArray(paths) || paths.length === 0) return;
+        const ok = await api.filterExistingLocalPaths(paths);
+        if (cancelled || !Array.isArray(ok)) return;
+        const tracks = ok.map(localPathToTrack);
+        setLocalLibraryTracks(tracks);
+        persistLocalLibraryPaths(tracks);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (activeTab !== 'search') {
       setSearchSubView('list');
       setArtistProfile(null);
@@ -191,6 +255,47 @@ export default function App() {
   const handleDjModeChange = (val) => {
     setDjMode(val);
     localStorage.setItem('aura_djmode', val);
+  };
+
+  const handleSetJamUsername = (name) => {
+    setJamUsername(name);
+    localStorage.setItem('aura_jam_username', name);
+  };
+
+  const handleCreatePlaylist = (name) => {
+    const newPlaylist = { id: Date.now().toString(), name, tracks: [] };
+    const next = [...playlists, newPlaylist];
+    setPlaylists(next);
+    localStorage.setItem('aura_playlists', JSON.stringify(next));
+  };
+
+  const handleDeletePlaylist = (id) => {
+    const next = playlists.filter(p => p.id !== id);
+    setPlaylists(next);
+    localStorage.setItem('aura_playlists', JSON.stringify(next));
+  };
+
+  const addToPlaylist = (playlistId, track) => {
+    const next = playlists.map(p => {
+      if (p.id === playlistId) {
+        if (p.tracks.find(t => t.id === track.id)) return p; // prevent duplicate
+        return { ...p, tracks: [...p.tracks, track] };
+      }
+      return p;
+    });
+    setPlaylists(next);
+    localStorage.setItem('aura_playlists', JSON.stringify(next));
+  };
+
+  const removeFromPlaylist = (playlistId, trackId) => {
+    const next = playlists.map(p => {
+      if (p.id === playlistId) {
+        return { ...p, tracks: p.tracks.filter(t => t.id !== trackId) };
+      }
+      return p;
+    });
+    setPlaylists(next);
+    localStorage.setItem('aura_playlists', JSON.stringify(next));
   };
 
   const saveFavorites = (newFavs) => {
@@ -281,6 +386,29 @@ export default function App() {
       setSearchArtists([]);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleImportLocalFiles = async () => {
+    try {
+      const api = window.electronAPI;
+      if (!api?.openLocalAudioFiles) return;
+      const res = await api.openLocalAudioFiles();
+      if (!res || res.canceled || !Array.isArray(res.paths) || res.paths.length === 0) return;
+      setLocalLibraryTracks((prev) => {
+        const seen = new Set(prev.map((t) => t.localPath));
+        const added = [];
+        for (const p of res.paths) {
+          if (!p || seen.has(p)) continue;
+          seen.add(p);
+          added.push(localPathToTrack(p));
+        }
+        const next = [...prev, ...added];
+        persistLocalLibraryPaths(next);
+        return next;
+      });
+    } catch (e) {
+      console.error('Import fichiers locaux:', e);
     }
   };
 
@@ -435,7 +563,7 @@ export default function App() {
       : [];
 
   return (
-    <div style={{ position: 'relative', width: '100vw', height: '100vh', overflow: 'hidden' }}>
+    <div style={{ position: 'relative', width: '100%', height: '100vh', maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
       {/* Dynamic Background */}
       <AnimatedBackground imageUrl={currentTrack?.artwork} />
 
@@ -573,31 +701,78 @@ export default function App() {
 
       {/* Main Full UI */}
       {!isMiniPlayer && (
-        <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '40px 20px', height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <div
+          style={{
+            width: '100%',
+            maxWidth: '1200px',
+            margin: '0 auto',
+            padding: 'clamp(16px, 3vw, 40px) clamp(12px, 2vw, 20px)',
+            height: '100vh',
+            display: 'flex',
+            flexDirection: 'column',
+            boxSizing: 'border-box',
+            minWidth: 0
+          }}
+        >
           
-          <header style={{ marginBottom: '30px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', WebkitAppRegion: 'drag' }}>
-            <div>
-              <h1 className="text-gradient" style={{ fontSize: '2.5rem', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Aura Player</h1>
-              <div style={{ display: 'flex', gap: '15px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
+          <header
+            style={{
+              marginBottom: 'clamp(16px, 3vw, 30px)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'flex-start',
+              justifyContent: 'space-between',
+              gap: '14px 18px',
+              WebkitAppRegion: 'drag',
+              width: '100%',
+              minWidth: 0
+            }}
+          >
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <h1 className="text-gradient" style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Aura Player</h1>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
                 <button className="glass" onClick={() => setActiveTab('home')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'home' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'home' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Home size={16} /> Accueil</button>
-                <button className="glass" onClick={() => setActiveTab('search')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'search' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'search' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Search size={16} /> Recherche</button>
                 <button className="glass" onClick={() => setActiveTab('favorites')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'favorites' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'favorites' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Heart size={16} /> Favoris</button>
                 <button className="glass" onClick={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'downloads' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'downloads' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><DownloadIcon size={16} /> Téléchargés</button>
+                <button className="glass" onClick={() => setActiveTab('local')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'local' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'local' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><FolderOpen size={16} /> Fichiers locaux</button>
+                <button className="glass" onClick={() => setActiveTab('playlists')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'playlists' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'playlists' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><ListMusic size={16} /> Playlists</button>
+                <button className="glass" onClick={() => setActiveTab('jam')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'jam' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'jam' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Users size={16} /> Jam</button>
                 <button className="glass" onClick={() => setActiveTab('settings')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'settings' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={16} /> Paramètres</button>
               </div>
             </div>
             
-            <div style={{ WebkitAppRegion: 'no-drag' }}>
-                {activeTab === 'search' && (
-                  <form onSubmit={handleSearch} className="glass" style={{ display: 'flex', alignItems: 'center', padding: '10px 20px', width: '400px', borderRadius: '30px' }}>
-                    <Search size={20} color="var(--text-secondary)" />
-                    <input type="text" placeholder="Rechercher musiques, artistes..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', marginLeft: '10px', fontSize: '1rem' }} />
-                  </form>
-                )}
+            <div
+              style={{
+                flex: '1 1 200px',
+                minWidth: 0,
+                maxWidth: '100%',
+                WebkitAppRegion: 'no-drag',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                alignItems: 'flex-start',
+                gap: '12px'
+              }}
+            >
+                <form 
+                  onSubmit={(e) => { e.preventDefault(); setActiveTab('search'); handleSearch(); }} 
+                  className="glass" 
+                  style={{ display: 'flex', alignItems: 'center', padding: '10px 16px', width: '100%', maxWidth: '400px', borderRadius: '30px', boxSizing: 'border-box' }}
+                >
+                  <Search size={20} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+                  <input 
+                    type="text" 
+                    placeholder="Rechercher musiques, artistes..." 
+                    value={searchQuery} 
+                    onChange={(e) => setSearchQuery(e.target.value)} 
+                    onFocus={() => setActiveTab('search')}
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', minWidth: 0, marginLeft: '10px', fontSize: '1rem' }} 
+                  />
+                </form>
+
                 {activeTab === 'favorites' && (
-                  <div className="glass" style={{ display: 'flex', alignItems: 'center', padding: '10px 20px', width: '400px', borderRadius: '30px' }}>
-                    <Search size={20} color="var(--text-secondary)" />
-                    <input type="text" placeholder="Rechercher dans les favoris..." value={favoritesSearch} onChange={(e) => setFavoritesSearch(e.target.value)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', marginLeft: '10px', fontSize: '1rem' }} />
+                  <div className="glass" style={{ display: 'flex', alignItems: 'center', padding: '10px 16px', width: '100%', maxWidth: '250px', borderRadius: '30px', boxSizing: 'border-box' }}>
+                    <Search size={18} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
+                    <input type="text" placeholder="Filtrer favoris..." value={favoritesSearch} onChange={(e) => setFavoritesSearch(e.target.value)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', minWidth: 0, marginLeft: '10px', fontSize: '0.9rem' }} />
                   </div>
                 )}
             </div>
@@ -605,13 +780,20 @@ export default function App() {
 
           <main
             ref={mainScrollRef}
+            onScroll={(e) => setIsScrolled(e.target.scrollTop > 10)}
             style={{
               flex: 1,
+              minHeight: 0,
+              minWidth: 0,
               overflowY: 'auto',
+              overflowX: 'hidden',
               overflowAnchor: 'none',
               paddingRight: '10px',
               paddingBottom: '120px',
-              WebkitAppRegion: 'no-drag'
+              WebkitAppRegion: 'no-drag',
+              maskImage: isScrolled ? 'linear-gradient(to bottom, transparent 0px, black 30px, black calc(100% - 30px), transparent 100%)' : 'linear-gradient(to bottom, black 0px, black calc(100% - 30px), transparent 100%)',
+              WebkitMaskImage: isScrolled ? 'linear-gradient(to bottom, transparent 0px, black 30px, black calc(100% - 30px), transparent 100%)' : 'linear-gradient(to bottom, black 0px, black calc(100% - 30px), transparent 100%)',
+              transition: 'mask-image 0.3s, -webkit-mask-image 0.3s'
             }}
           >
             {activeTab === 'settings' ? (
@@ -634,6 +816,7 @@ export default function App() {
                 onNavigateSearch={() => setActiveTab('search')}
                 onNavigateFavorites={() => setActiveTab('favorites')}
                 onNavigateDownloads={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }}
+                onNavigateLocal={() => setActiveTab('local')}
               />
             ) : activeTab === 'search' && isLoading ? (
               <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
@@ -733,10 +916,46 @@ export default function App() {
                       toggleFavorite={toggleFavorite}
                       onTrackDownloaded={handleTrackDownloaded}
                       onOpenArtist={openArtistFromTrack}
+                      playlists={playlists}
+                      onAddToPlaylist={addToPlaylist}
                     />
                   </>
                 )}
               </>
+            ) : activeTab === 'local' ? (
+              <LocalFilesView
+                tracks={localLibraryTracks}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                onPlay={(track, index) => playTrack(track, index, localLibraryTracks)}
+                onImport={handleImportLocalFiles}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onOpenArtist={openArtistFromTrack}
+              />
+            ) : activeTab === 'jam' ? (
+              <JamView
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                onPlayTrack={playTrack}
+                playbackPosition={0}
+                username={jamUsername}
+                onSetUsername={handleSetJamUsername}
+              />
+            ) : activeTab === 'playlists' ? (
+              <PlaylistsView
+                playlists={playlists}
+                onCreatePlaylist={handleCreatePlaylist}
+                onDeletePlaylist={handleDeletePlaylist}
+                onPlayPlaylist={(pl) => playTrack(pl.tracks[0], 0, pl.tracks)}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                onPlayTrack={playTrack}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onTrackDownloaded={handleTrackDownloaded}
+                onRemoveFromPlaylist={removeFromPlaylist}
+              />
             ) : activeTab === 'downloads' ? (
               downloadsLoading ? (
                 <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
@@ -760,6 +979,8 @@ export default function App() {
                 favorites={favorites}
                 toggleFavorite={toggleFavorite}
                 onTrackDownloaded={handleTrackDownloaded}
+                playlists={playlists}
+                onAddToPlaylist={addToPlaylist}
               />
             )}
           </main>
