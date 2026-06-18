@@ -59,7 +59,8 @@ export default function Player({
   reverbEnabled,
   djMode,
   onPlaybackChange,
-  onOpenArtist
+  onOpenArtist,
+  onPositionUpdate
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
@@ -86,6 +87,12 @@ export default function Player({
   const isDraggingRef = useRef(false);
   /** Après erreur streaming : pas de auto-next tant que l'utilisateur n'a pas choisi une autre piste / suivant manuel. */
   const blockEndedAdvanceRef = useRef(false);
+  /** Empêche le double-déclenchement du crossfade DJ (onNext appelé plusieurs fois). */
+  const crossfadeLockRef = useRef(false);
+  /** Timeout ID pour le nettoyage du deck après crossfade. */
+  const crossfadeTimeoutRef = useRef(null);
+  /** Interval IDs pour le fade-in/fade-out du togglePlay. */
+  const fadeIntervalRef = useRef(null);
 
   const getActiveAudio = () => (activeDeckRef.current === 'A' ? audioARef.current : audioBRef.current);
 
@@ -108,9 +115,14 @@ export default function Player({
         setProgress((current / durationSec) * 100 || 0);
       }
 
-      if (djMode && !isLooping && !blockEndedAdvanceRef.current && durationSec > 10) {
+      if (onPositionUpdate && durationSec > 0) {
+        onPositionUpdate(current, durationSec);
+      }
+
+      if (djMode && !isLooping && !blockEndedAdvanceRef.current && !crossfadeLockRef.current && durationSec > 10) {
           if (current >= durationSec - 3.0 && audio.dataset.fading !== "true") {
               audio.dataset.fading = "true";
+              crossfadeLockRef.current = true;
               onNext();
           }
       }
@@ -216,22 +228,29 @@ export default function Player({
       
       const targetVol = isMuted ? 0 : volume;
       const fadeStep = 0.05;
-      const fadeInterval = 10;
+      const fadeIntervalMs = 10;
+      
+      // Nettoie tout interval de fade précédent pour éviter les fuites
+      if (fadeIntervalRef.current) {
+        clearInterval(fadeIntervalRef.current);
+        fadeIntervalRef.current = null;
+      }
       
       if (isPlaying) {
         setIsPlaying(false);
         cancelAnimationFrame(requestRef.current);
         
         let v = audio.volume;
-        const fadeOut = setInterval(() => {
+        fadeIntervalRef.current = setInterval(() => {
           v = Math.max(0, v - fadeStep);
           audio.volume = v;
           if (v <= 0) {
-            clearInterval(fadeOut);
+            clearInterval(fadeIntervalRef.current);
+            fadeIntervalRef.current = null;
             audio.pause();
             audio.volume = targetVol; // Restore for next play
           }
-        }, fadeInterval);
+        }, fadeIntervalMs);
       } else {
         setIsPlaying(true);
         requestRef.current = requestAnimationFrame(updateProgress);
@@ -239,17 +258,22 @@ export default function Player({
         audio.volume = 0;
         audio.play().then(() => {
           let v = 0;
-          const fadeIn = setInterval(() => {
+          fadeIntervalRef.current = setInterval(() => {
             v = Math.min(targetVol, v + fadeStep);
             audio.volume = v;
             if (v >= targetVol) {
-              clearInterval(fadeIn);
+              clearInterval(fadeIntervalRef.current);
+              fadeIntervalRef.current = null;
             }
-          }, fadeInterval);
+          }, fadeIntervalMs);
         }).catch(err => {
           console.error("Play failed", err);
           setIsPlaying(false);
           audio.volume = targetVol;
+          if (fadeIntervalRef.current) {
+            clearInterval(fadeIntervalRef.current);
+            fadeIntervalRef.current = null;
+          }
         });
       }
     }
@@ -268,6 +292,13 @@ export default function Player({
   }, []); 
 
   useEffect(() => {
+    // Nettoie le timeout de crossfade précédent quand on change de piste
+    if (crossfadeTimeoutRef.current) {
+      clearTimeout(crossfadeTimeoutRef.current);
+      crossfadeTimeoutRef.current = null;
+    }
+    crossfadeLockRef.current = false;
+
     if (!currentTrack) {
       [audioARef.current, audioBRef.current].forEach((audio) => {
         if (!audio) return;
@@ -294,32 +325,41 @@ export default function Player({
       setIsPlaying(true);
       if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
 
-      const newDeck = activeDeck === 'A' ? 'B' : 'A';
+      // Toujours utiliser le ref pour la cohérence (pas le state qui peut être stale)
+      const previousDeck = activeDeckRef.current;
+      const newDeck = previousDeck === 'A' ? 'B' : 'A';
       activeDeckRef.current = newDeck;
 
-      const activeAudio = activeDeck === 'A' ? audioARef.current : audioBRef.current;
-      const nextAudio = activeDeck === 'A' ? audioBRef.current : audioARef.current;
+      const activeAudio = previousDeck === 'A' ? audioARef.current : audioBRef.current;
+      const nextAudio = previousDeck === 'A' ? audioBRef.current : audioARef.current;
 
-      const activeGain = activeDeck === 'A' ? gainARef.current : gainBRef.current;
-      const nextGain = activeDeck === 'A' ? gainBRef.current : gainARef.current;
+      const activeGain = previousDeck === 'A' ? gainARef.current : gainBRef.current;
+      const nextGain = previousDeck === 'A' ? gainBRef.current : gainARef.current;
 
-      const isAutomaticTransition = activeAudio && activeAudio.dataset.fading === "true";
+      const isAutomaticTransition = djMode && activeAudio && activeAudio.dataset.fading === "true";
 
-      if (djMode && isAutomaticTransition) {
+      if (isAutomaticTransition) {
         prepareAudioElementForSrc(nextAudio, streamUrl);
         nextAudio.src = streamUrl;
         nextAudio.dataset.fading = "false";
         nextAudio.play().catch(() => {});
 
-        nextGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
-        nextGain.gain.linearRampToValueAtTime(1, audioCtxRef.current.currentTime + 3);
+        // Récupérer le currentTime AVANT de planifier les ramps (évite les races après resume())
+        const now = audioCtxRef.current.currentTime;
+        nextGain.gain.setValueAtTime(0, now);
+        nextGain.gain.linearRampToValueAtTime(1, now + 3);
 
         if (activeAudio && !activeAudio.paused) {
-          activeGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
-          activeGain.gain.linearRampToValueAtTime(0, audioCtxRef.current.currentTime + 3);
-          setTimeout(() => {
-            activeAudio.pause();
-            activeAudio.removeAttribute('src');
+          activeGain.gain.setValueAtTime(1, now);
+          activeGain.gain.linearRampToValueAtTime(0, now + 3);
+          // Capture les références pour le timeout pour éviter de manipuler le mauvais audio
+          const prevAudio = activeAudio;
+          crossfadeTimeoutRef.current = setTimeout(() => {
+            crossfadeTimeoutRef.current = null;
+            if (prevAudio) {
+              prevAudio.pause();
+              prevAudio.removeAttribute('src');
+            }
           }, 3000);
         }
       } else {
@@ -331,8 +371,10 @@ export default function Player({
         nextAudio.src = streamUrl;
         nextAudio.dataset.fading = "false";
         nextAudio.play().catch(() => {});
-        nextGain.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
-        activeGain.gain.setValueAtTime(0, audioCtxRef.current.currentTime);
+        // Planifier les gains après resume() potentiel
+        const now = audioCtxRef.current.currentTime;
+        nextGain.gain.setValueAtTime(1, now);
+        activeGain.gain.setValueAtTime(0, now);
       }
 
       if (cancelled) return;

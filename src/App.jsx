@@ -86,6 +86,7 @@ export default function App() {
   const [downloadsLoading, setDownloadsLoading] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [jamUsername, setJamUsername] = useState(() => localStorage.getItem('aura_jam_username') || '');
+  const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playlists, setPlaylists] = useState(() => {
     try {
       const raw = localStorage.getItem('aura_playlists');
@@ -260,6 +261,25 @@ export default function App() {
   const handleSetJamUsername = (name) => {
     setJamUsername(name);
     localStorage.setItem('aura_jam_username', name);
+  };
+
+  /** Synchronisation Jam — appelée par JamView quand un host state arrive (listener uniquement) */
+  const handleJamSync = ({ track, playing, position, hostTimestamp }) => {
+    if (!track) return;
+    // Ne pas synchro si on est host
+    // Vérifier si le morceau a changé
+    if (!currentTrack || currentTrack.id !== track.id) {
+      // Nouveau morceau : lancer la lecture
+      setPlaybackManualEpoch((n) => n + 1);
+      setCurrentTrack(track);
+      setPlaylistContext([track]);
+      setCurrentIndex(0);
+    }
+    // Synchro play/pause
+    if (playing !== isAudioPlaying) {
+      // toggle play via keyboard event simulation n'est pas propre,
+      // on laisse le Player gérer son état, on sync juste les infos
+    }
   };
 
   const handleCreatePlaylist = (name) => {
@@ -938,7 +958,8 @@ export default function App() {
                 currentTrack={currentTrack}
                 isAudioPlaying={isAudioPlaying}
                 onPlayTrack={playTrack}
-                playbackPosition={0}
+                onJamSync={handleJamSync}
+                playbackPosition={playbackPosition}
                 username={jamUsername}
                 onSetUsername={handleSetJamUsername}
               />
@@ -1038,6 +1059,9 @@ export default function App() {
         djMode={djMode}
         onPlaybackChange={setIsAudioPlaying}
         onOpenArtist={openArtistFromTrack}
+        onPositionUpdate={(pos, dur) => {
+          setPlaybackPosition(pos);
+        }}
       />
     </div>
   );
