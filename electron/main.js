@@ -288,22 +288,31 @@ function createWindow(icon) {
     flushUpdaterStatusToRenderer();
   });
 
-  // Dev: use 127.0.0.1 so it matches Vite (localhost → IPv6-only mismatch causes endless load on some macOS setups)
+  // Dev: try Vite first. If unavailable after 3s, load built dist/index.html
   if (!app.isPackaged) {
     const devUrl = 'http://127.0.0.1:3005';
+    const distIndex = path.join(__dirname, '../dist/index.html');
+    let viteLoaded = false;
     let attempts = 0;
-    const loadDev = () => {
-      attempts += 1;
-      mainWindow.loadURL(devUrl).catch(() => {
-        if (attempts < 80) setTimeout(loadDev, 250);
-      });
+
+    const loadDist = () => {
+      if (viteLoaded) return;
+      viteLoaded = true;
+      mainWindow.loadFile(distIndex);
     };
-    mainWindow.webContents.on('did-fail-load', (_event, code, _desc, failedUrl) => {
-      if (failedUrl !== devUrl || attempts >= 80) return;
-      if (code === -102 || code === -105 || code === -106 || code === -7) setTimeout(loadDev, 300);
+
+    mainWindow.loadURL(devUrl).then(() => {
+      viteLoaded = true;
+      mainWindow.webContents.openDevTools();
+    }).catch(() => {
+      // Vite not running – fallback to dist immediately
+      loadDist();
     });
-    loadDev();
-    mainWindow.webContents.openDevTools();
+
+    // Safety timeout: if Vite doesn't respond within 3s, load dist
+    setTimeout(() => {
+      if (!viteLoaded) loadDist();
+    }, 3000);
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
