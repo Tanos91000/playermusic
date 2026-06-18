@@ -288,31 +288,50 @@ function createWindow(icon) {
     flushUpdaterStatusToRenderer();
   });
 
-  // Dev: try Vite first. If unavailable after 3s, load built dist/index.html
+  // Dev: try Vite first (retry a few times). After timeout, load built dist/index.html
   if (!app.isPackaged) {
     const devUrl = 'http://127.0.0.1:3005';
     const distIndex = path.join(__dirname, '../dist/index.html');
     let viteLoaded = false;
     let attempts = 0;
+    const MAX_ATTEMPTS = 16; // ~8 seconds (16 x 500ms)
 
     const loadDist = () => {
       if (viteLoaded) return;
       viteLoaded = true;
+      console.log('[Aura] Vite unreachable – loading dist/index.html');
       mainWindow.loadFile(distIndex);
     };
 
-    mainWindow.loadURL(devUrl).then(() => {
-      viteLoaded = true;
-      mainWindow.webContents.openDevTools();
-    }).catch(() => {
-      // Vite not running – fallback to dist immediately
-      loadDist();
+    const tryVite = () => {
+      if (viteLoaded) return;
+      attempts += 1;
+      mainWindow.loadURL(devUrl).then(() => {
+        viteLoaded = true;
+        mainWindow.webContents.openDevTools();
+      }).catch(() => {
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(tryVite, 500);
+        } else {
+          loadDist();
+        }
+      });
+    };
+
+    mainWindow.webContents.on('did-fail-load', (_event, code, _desc, failedUrl) => {
+      if (viteLoaded) return;
+      if (failedUrl !== devUrl || attempts >= MAX_ATTEMPTS) return;
+      if (code === -102 || code === -105 || code === -106 || code === -7) {
+        attempts += 1;
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(tryVite, 500);
+        } else {
+          loadDist();
+        }
+      }
     });
 
-    // Safety timeout: if Vite doesn't respond within 3s, load dist
-    setTimeout(() => {
-      if (!viteLoaded) loadDist();
-    }, 3000);
+    tryVite();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
