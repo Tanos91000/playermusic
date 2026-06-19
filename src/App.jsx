@@ -953,16 +953,6 @@ export default function App() {
                 toggleFavorite={toggleFavorite}
                 onOpenArtist={openArtistFromTrack}
               />
-            ) : activeTab === 'jam' ? (
-              <JamView
-                currentTrack={currentTrack}
-                isAudioPlaying={isAudioPlaying}
-                onPlayTrack={playTrack}
-                onJamSync={handleJamSync}
-                playbackPosition={playbackPosition}
-                username={jamUsername}
-                onSetUsername={handleSetJamUsername}
-              />
             ) : activeTab === 'playlists' ? (
               <PlaylistsView
                 playlists={playlists}
