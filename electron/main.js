@@ -155,14 +155,70 @@ function serveLocalAudioFile(req, res, filePath) {
   return stream.pipe(res);
 }
 
-// Tiny local server to proxy SoundCloud streams (replaces Next.js API route)
-const server = http.createServer(async (req, res) => {
-  const urlParams = new URLSearchParams(req.url.split('?')[1]);
-  const url = urlParams.get('url');
+/** Serve a static file from dist/ with correct MIME type */
+function getMimeType(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  switch (ext) {
+    case '.js':
+    case '.mjs':
+      return 'text/javascript';
+    case '.css':
+      return 'text/css';
+    case '.html':
+      return 'text/html';
+    case '.json':
+      return 'application/json';
+    case '.png':
+      return 'image/png';
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg';
+    case '.svg':
+      return 'image/svg+xml';
+    case '.ico':
+      return 'image/x-icon';
+    case '.woff':
+    case '.woff2':
+      return 'font/woff2';
+    default:
+      return 'application/octet-stream';
+  }
+}
 
+function serveStaticFile(req, res, filePath) {
+  if (!fs.existsSync(filePath)) {
+    res.statusCode = 404;
+    return res.end('Not found');
+  }
+  const stats = fs.statSync(filePath);
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', getMimeType(filePath));
+  res.setHeader('Content-Length', stats.size);
+  const rs = fs.createReadStream(filePath);
+  rs.on('error', () => {
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.end();
+    }
+  });
+  rs.pipe(res);
+}
+
+const distDir = path.join(__dirname, '../dist');
+
+// Tiny local server to proxy SoundCloud streams + serve static dist/ for standalone mode
+const server = http.createServer(async (req, res) => {
+  const parsed = new URL(req.url, 'http://127.0.0.1:3006');
+  const url = parsed.searchParams.get('url');
+
+  // No ?url= param — serve static file from dist/
   if (!url) {
-    res.statusCode = 400;
-    return res.end('Missing url parameter');
+    let reqPath = parsed.pathname;
+    if (reqPath === '/' || reqPath === '') reqPath = '/index.html';
+    // Sanitize path (prevent directory traversal)
+    const safePath = path.normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/, '');
+    const fullPath = path.join(distDir, safePath);
+    return serveStaticFile(req, res, fullPath);
   }
 
   // Handle local file serving (must support Range so <audio> can seek)
@@ -288,52 +344,24 @@ function createWindow(icon) {
     flushUpdaterStatusToRenderer();
   });
 
-  // Dev: try Vite first (retry a few times). After timeout, load built dist/index.html
+  // Load from built-in HTTP server (port 3006 serves dist/) — avoids file:// ES module restrictions
+  // Dev mode: try Vite first (port 3005), fallback to local server instantly
   if (!app.isPackaged) {
     const devUrl = 'http://127.0.0.1:3005';
-    const distIndex = path.join(__dirname, '../dist/index.html');
+    const localUrl = 'http://127.0.0.1:3006/';
     let viteLoaded = false;
-    let attempts = 0;
-    const MAX_ATTEMPTS = 16; // ~8 seconds (16 x 500ms)
 
-    const loadDist = () => {
-      if (viteLoaded) return;
+    mainWindow.loadURL(devUrl).then(() => {
       viteLoaded = true;
-      console.log('[Aura] Vite unreachable – loading dist/index.html');
-      mainWindow.loadFile(distIndex);
-    };
-
-    const tryVite = () => {
-      if (viteLoaded) return;
-      attempts += 1;
-      mainWindow.loadURL(devUrl).then(() => {
+      mainWindow.webContents.openDevTools();
+    }).catch(() => {
+      if (!viteLoaded) {
         viteLoaded = true;
-        mainWindow.webContents.openDevTools();
-      }).catch(() => {
-        if (attempts < MAX_ATTEMPTS) {
-          setTimeout(tryVite, 500);
-        } else {
-          loadDist();
-        }
-      });
-    };
-
-    mainWindow.webContents.on('did-fail-load', (_event, code, _desc, failedUrl) => {
-      if (viteLoaded) return;
-      if (failedUrl !== devUrl || attempts >= MAX_ATTEMPTS) return;
-      if (code === -102 || code === -105 || code === -106 || code === -7) {
-        attempts += 1;
-        if (attempts < MAX_ATTEMPTS) {
-          setTimeout(tryVite, 500);
-        } else {
-          loadDist();
-        }
+        mainWindow.loadURL(localUrl);
       }
     });
-
-    tryVite();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    mainWindow.loadURL('http://127.0.0.1:3006/');
   }
 }
 
