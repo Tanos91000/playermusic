@@ -55,7 +55,8 @@
       {
         "provider": "github",
         "owner": "Tanos91000",
-        "repo": "playermusic"
+        "repo": "playermusic",
+        "releaseType": "release"
       }
     ],
     "mac": {
