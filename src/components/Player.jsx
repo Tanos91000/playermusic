@@ -8,6 +8,9 @@ import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
 import { formatStreamCount } from '../utils/formatPlayback';
 import LyricsModal from './LyricsModal';
 
+/** Hauteur de la barre du lecteur : l'app réserve cette place pour ne rien masquer. */
+export const PLAYER_HEIGHT = 92;
+
 function prepareAudioElementForSrc(audio, url) {
   if (!audio || !url) return;
   if (url.startsWith('file:')) {
@@ -61,6 +64,7 @@ export default function Player({
   reverb,
   reverbEnabled,
   djMode,
+  crossfadeSeconds = 3,
   onPlaybackChange,
   onOpenArtist,
   onPositionUpdate,
@@ -72,7 +76,8 @@ export default function Player({
   onCycleRepeat,
   queueCount = 0,
   onToggleQueue,
-  isRepairing = false
+  isRepairing = false,
+  titleBarOffset = 0
 }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
@@ -156,8 +161,8 @@ export default function Player({
         onPositionUpdate(current, durationSec);
       }
 
-      if (djMode && !isLooping && !blockEndedAdvanceRef.current && !crossfadeLockRef.current && durationSec > 10) {
-          if (current >= durationSec - 3.0 && audio.dataset.fading !== "true") {
+      if (djMode && !isLooping && !blockEndedAdvanceRef.current && !crossfadeLockRef.current && durationSec > crossfadeSeconds + 7) {
+          if (current >= durationSec - crossfadeSeconds && audio.dataset.fading !== "true") {
               audio.dataset.fading = "true";
               crossfadeLockRef.current = true;
               onNext();
@@ -420,12 +425,13 @@ export default function Player({
 
         // Récupérer le currentTime AVANT de planifier les ramps (évite les races après resume())
         const now = audioCtxRef.current.currentTime;
+        const fade = crossfadeSeconds;
         nextGain.gain.setValueAtTime(0, now);
-        nextGain.gain.linearRampToValueAtTime(1, now + 3);
+        nextGain.gain.linearRampToValueAtTime(1, now + fade);
 
         if (activeAudio && !activeAudio.paused) {
           activeGain.gain.setValueAtTime(1, now);
-          activeGain.gain.linearRampToValueAtTime(0, now + 3);
+          activeGain.gain.linearRampToValueAtTime(0, now + fade);
           // Capture les références pour le timeout pour éviter de manipuler le mauvais audio
           const prevAudio = activeAudio;
           crossfadeTimeoutRef.current = setTimeout(() => {
@@ -434,7 +440,7 @@ export default function Player({
               prevAudio.pause();
               prevAudio.removeAttribute('src');
             }
-          }, 3000);
+          }, fade * 1000);
         }
       } else {
         if (activeAudio) {
@@ -702,7 +708,8 @@ export default function Player({
             bottom: 0,
             left: 0,
             right: 0,
-            padding: '16px 20px',
+            height: `${PLAYER_HEIGHT}px`,
+            padding: '0 20px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -831,10 +838,13 @@ export default function Player({
         </div>
       )}
       {showLyrics && currentTrack && (
-        <LyricsModal 
-          track={currentTrack} 
-          currentTime={getActiveAudio()?.currentTime || 0} 
-          onClose={() => setShowLyrics(false)} 
+        <LyricsModal
+          track={currentTrack}
+          currentTime={getActiveAudio()?.currentTime || 0}
+          onSeek={(seconds) => controlsRef?.current?.seek?.(seconds)}
+          topOffset={titleBarOffset}
+          bottomOffset={isMini ? 0 : PLAYER_HEIGHT}
+          onClose={() => setShowLyrics(false)}
         />
       )}
     </>

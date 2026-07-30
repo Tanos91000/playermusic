@@ -64,7 +64,7 @@ function Section({ title, action, children }) {
   return (
     <section style={{ marginBottom: '22px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-        <h4 style={{ margin: 0, fontSize: '0.78rem', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
+        <h4 style={{ margin: 0, fontSize: '0.84rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
           {title}
         </h4>
         {action}
@@ -78,6 +78,8 @@ function Section({ title, action, children }) {
 export default function QueueView({
   open,
   onClose,
+  topOffset = 0,
+  bottomOffset = 0,
   currentTrack,
   isAudioPlaying,
   queue,
@@ -100,9 +102,10 @@ export default function QueueView({
         className="slide-in-right"
         style={{
           position: 'fixed',
-          top: 0,
+          // Sous la barre de titre, au-dessus du lecteur : sinon l'en-tête était rogné.
+          top: `${topOffset}px`,
           right: 0,
-          bottom: 0,
+          bottom: `${bottomOffset}px`,
           width: 'min(400px, 92vw)',
           zIndex: 61,
           background: 'rgba(14, 14, 18, 0.97)',

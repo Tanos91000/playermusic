@@ -26,6 +26,9 @@ function resolveAppIcon() {
   const candidates = [];
 
   if (process.platform === 'win32') {
+    // PNG d'abord : nativeImage lit certains .ico multi-résolution comme vides,
+    // ce qui laissait l'icône Electron par défaut dans la barre des tâches.
+    candidates.push(path.join(iconsRoot, 'icon.png'));
     if (app.isPackaged) candidates.push(path.join(process.resourcesPath, 'icon.ico'));
     candidates.push(path.join(iconsRoot, 'icon.ico'));
   } else if (process.platform === 'darwin') {
@@ -349,9 +352,18 @@ function createWindow(icon) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    minWidth: 900,
+    minHeight: 600,
     ...(icon ? { icon } : {}),
-    // hiddenInset: drag region + traffic lights on macOS; default framed window on Windows/Linux
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
+    backgroundColor: '#09090b',
+    show: false,
+    // macOS : on garde les pastilles système, alignées sur notre barre de 38 px.
+    // Windows/Linux : plus de cadre natif, les contrôles sont dessinés par l'app.
+    // Pastilles centrées verticalement dans la barre de 56 px :
+    // (56 - 12) / 2 = 22, où 12 px est le diamètre d'un bouton macOS.
+    ...(process.platform === 'darwin'
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 22 } }
+      : { frame: false }),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -361,9 +373,30 @@ function createWindow(icon) {
     },
   });
 
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+
   mainWindow.webContents.once('did-finish-load', () => {
     flushUpdaterStatusToRenderer();
   });
+
+  /** Le renderer redessine ses contrôles selon l'état réel de la fenêtre. */
+  const sendWindowState = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const wc = mainWindow.webContents;
+    if (!wc || wc.isDestroyed()) return;
+    wc.send('window-state', {
+      maximized: mainWindow.isMaximized(),
+      fullScreen: mainWindow.isFullScreen(),
+      platform: process.platform
+    });
+  };
+
+  for (const evt of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen', 'restore']) {
+    mainWindow.on(evt, sendWindowState);
+  }
+  mainWindow.webContents.on('did-finish-load', sendWindowState);
 
   // Load from built-in HTTP server (port 3006 serves dist/) — avoids file:// ES module restrictions
   // Dev mode: try Vite first (port 3005), fallback to local server instantly
@@ -468,6 +501,37 @@ ipcMain.handle('resize-window', (_event, { width, height, isMini }) => {
   }
 
   finish();
+});
+
+/** Contrôles de fenêtre pour la barre de titre dessinée par l'app (Windows/Linux). */
+ipcMain.handle('window-control', (_event, action) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  switch (action) {
+    case 'minimize':
+      mainWindow.minimize();
+      break;
+    case 'maximize':
+      if (mainWindow.isMaximized()) mainWindow.unmaximize();
+      else mainWindow.maximize();
+      break;
+    case 'close':
+      mainWindow.close();
+      break;
+    default:
+      break;
+  }
+  return null;
+});
+
+ipcMain.handle('window-get-state', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { maximized: false, fullScreen: false, platform: process.platform };
+  }
+  return {
+    maximized: mainWindow.isMaximized(),
+    fullScreen: mainWindow.isFullScreen(),
+    platform: process.platform
+  };
 });
 
 ipcMain.handle('open-local-audio-files', async (event) => {

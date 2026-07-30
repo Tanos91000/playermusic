@@ -101,13 +101,85 @@ function mapSoundCloudCollection(collection, getDownloads, getDownloadPath) {
   });
 }
 
+/** Minuscules, sans accents ni ponctuation : base de comparaison stable. */
+function normalizeForMatch(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenize(str) {
+  return normalizeForMatch(str).split(' ').filter(Boolean);
+}
+
+/**
+ * Score de pertinence d'une piste pour une requête.
+ *
+ * La recherche SoundCloud renvoie souvent des résultats très approximatifs :
+ * on récupère un lot plus large puis on le réordonne ici, en combinant
+ * correspondance du titre, de l'artiste et popularité.
+ */
+function scoreTrack(track, query) {
+  const qNorm = normalizeForMatch(query);
+  if (!qNorm) return 0;
+  const qTokens = tokenize(query);
+  const title = normalizeForMatch(track.title);
+  const artist = normalizeForMatch(track.artist);
+  const haystack = `${title} ${artist}`;
+
+  let score = 0;
+
+  if (title === qNorm) score += 120;
+  else if (title.startsWith(qNorm)) score += 70;
+  else if (title.includes(qNorm)) score += 45;
+
+  if (artist === qNorm) score += 55;
+  else if (artist.includes(qNorm)) score += 25;
+
+  // Couverture : proportion des mots de la requête réellement présents.
+  const matched = qTokens.filter((t) => haystack.includes(t)).length;
+  const coverage = qTokens.length ? matched / qTokens.length : 0;
+  score += coverage * 60;
+  if (coverage < 1) score -= (1 - coverage) * 40;
+
+  // Popularité : nette mais secondaire, pour départager des titres équivalents.
+  const plays = Number(track.playbackCount) || 0;
+  if (plays > 0) score += Math.min(25, Math.log10(plays + 1) * 4);
+
+  // Un titre très long par rapport à la requête est souvent un remix/mashup.
+  const extra = Math.max(0, title.split(' ').length - qTokens.length);
+  score -= Math.min(14, extra * 1.6);
+
+  // Une piste déjà disponible localement remonte : elle est jouable tout de suite.
+  if (track.isFixed) score += 8;
+  if (track.unavailable) score -= 12;
+
+  return score;
+}
+
+function rankTracks(tracks, query) {
+  if (!query || !Array.isArray(tracks)) return tracks;
+  return tracks
+    .map((track, index) => ({ track, index, score: scoreTrack(track, query) }))
+    .sort((a, b) => (b.score - a.score) || (a.index - b.index))
+    .map((entry) => entry.track);
+}
+
 async function searchSoundCloudTracks(scdl, query, getDownloads, getDownloadPath, limit = 30) {
+  // On demande plus large que ce qu'on affiche : le tri par pertinence a besoin
+  // de matière, l'API SoundCloud ne classant pas bien les résultats.
+  const fetchLimit = Math.min(100, Math.max(limit, limit * 2));
   const searchResults = await scdl.search({
     query,
     resourceType: 'tracks',
-    limit
+    limit: fetchLimit
   });
-  return mapSoundCloudCollection(searchResults.collection, getDownloads, getDownloadPath);
+  const mapped = mapSoundCloudCollection(searchResults.collection, getDownloads, getDownloadPath);
+  return rankTracks(mapped, query).slice(0, limit);
 }
 
 async function searchSoundCloudUsers(scdl, query, limit = 15) {
@@ -157,6 +229,8 @@ async function searchSoundCloudUnified(scdl, query, getDownloads, getDownloadPat
 }
 
 module.exports = {
+  scoreTrack,
+  rankTracks,
   mapSoundCloudCollection,
   mapSoundCloudSearchUser,
   mapSoundCloudUserProfile,

@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('spotify-import-progress');
     ipcRenderer.on('spotify-import-progress', (_event, payload) => callback(payload));
   },
+  windowControl: (action) => ipcRenderer.invoke('window-control', action),
+  getWindowState: () => ipcRenderer.invoke('window-get-state'),
+  onWindowState: (callback) => {
+    ipcRenderer.removeAllListeners('window-state');
+    ipcRenderer.on('window-state', (_event, state) => callback(state));
+  },
   openLocalAudioFiles: () => ipcRenderer.invoke('open-local-audio-files'),
   filterExistingLocalPaths: (paths) => ipcRenderer.invoke('filter-existing-local-paths', paths)
 });

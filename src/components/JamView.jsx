@@ -103,6 +103,13 @@ export default function JamView({
   const publishHostStateRef = useRef(publishHostState);
   publishHostStateRef.current = publishHostState;
 
+  /**
+   * Idem pour le callback de synchro : le handler MQTT est enregistré une seule
+   * fois, il capturait donc une version figée (état de lecture périmé).
+   */
+  const onJamSyncRef = useRef(onJamSync);
+  onJamSyncRef.current = onJamSync;
+
   // ---- Publish listener presence ----
   const publishPresence = useCallback(() => {
     const c = clientRef.current;
@@ -169,8 +176,8 @@ export default function JamView({
           }, HOST_PUBLISH_MS);
         });
       } else {
-        // Listener subscribes to host topic
-        mqttClient.subscribe(topicHost(sid), (err) => {
+        // L'auditeur suit l'hôte, et voit aussi les autres auditeurs présents.
+        mqttClient.subscribe([topicHost(sid), topicAllListeners(sid)], (err) => {
           if (err) return;
           // Announce presence
           publishPresence();
@@ -187,7 +194,7 @@ export default function JamView({
         const data = JSON.parse(message.toString());
         if (!data || data.sessionId !== sid) return;
 
-        if (role === 'host' && data.type === 'listener_presence') {
+        if (data.type === 'listener_presence') {
           if (data.listenerId === myIdRef.current) return;
           setListeners(prev => ({
             ...prev,
@@ -204,14 +211,12 @@ export default function JamView({
             timestamp: data.timestamp
           });
           // Notify App to sync
-          if (onJamSync) {
-            onJamSync({
-              track: data.track,
-              playing: data.playing,
-              position: data.position,
-              hostTimestamp: data.timestamp
-            });
-          }
+          onJamSyncRef.current?.({
+            track: data.track,
+            playing: data.playing,
+            position: data.position,
+            hostTimestamp: data.timestamp
+          });
         }
       } catch {}
     });

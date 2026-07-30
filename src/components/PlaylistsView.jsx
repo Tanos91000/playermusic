@@ -1,6 +1,36 @@
-import { useState } from 'react';
-import { Play, Plus, Trash2, X, Music } from 'lucide-react';
-import TrackList from './TrackList';
+import { useEffect, useState } from 'react';
+import { Plus, Trash2, ArrowLeft, ListMusic, Music } from 'lucide-react';
+import CollectionView from './CollectionView';
+
+/** Couverture d'une playlist : mosaïque des pochettes, ou dégradé stable par nom. */
+function PlaylistCover({ playlist }) {
+  const arts = playlist.tracks.map((t) => t.artwork).filter(Boolean).slice(0, 4);
+
+  if (arts.length >= 4) {
+    return (
+      <div className="pl-card__cover pl-card__cover--grid">
+        {arts.map((src, i) => (
+          <img key={`${src}-${i}`} src={src} alt="" />
+        ))}
+      </div>
+    );
+  }
+  if (arts.length > 0) {
+    return <img src={arts[0]} alt="" className="pl-card__cover" />;
+  }
+
+  // Teinte dérivée du nom : chaque playlist garde la même couleur d'une fois sur l'autre.
+  let hash = 0;
+  for (let i = 0; i < playlist.name.length; i += 1) hash = (hash * 31 + playlist.name.charCodeAt(i)) % 360;
+  return (
+    <div
+      className="pl-card__cover pl-card__cover--empty"
+      style={{ background: `linear-gradient(140deg, hsl(${hash} 65% 45%), hsl(${(hash + 48) % 360} 60% 28%))` }}
+    >
+      <Music size={38} strokeWidth={1.5} />
+    </div>
+  );
+}
 
 export default function PlaylistsView({
   playlists,
@@ -8,111 +38,131 @@ export default function PlaylistsView({
   onDeletePlaylist,
   onPlayPlaylist,
   onPlayTrack,
+  onShufflePlaylist,
   onRemoveFromPlaylist,
-  ...trackListProps
+  createRequest = 0,
+  ...trackProps
 }) {
-  /** On garde l'id (et non l'objet) pour que la vue reflète les retraits en direct. */
   const [selectedPlaylistId, setSelectedPlaylistId] = useState(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
 
   const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || null;
 
+  useEffect(() => {
+    if (createRequest > 0) {
+      setSelectedPlaylistId(null);
+      setIsCreating(true);
+    }
+  }, [createRequest]);
+
   const handleCreate = (e) => {
     e.preventDefault();
-    if (newPlaylistName.trim()) {
-      onCreatePlaylist(newPlaylistName.trim());
-      setNewPlaylistName('');
-      setIsCreating(false);
-    }
+    const name = newPlaylistName.trim();
+    if (!name) return;
+    onCreatePlaylist(name);
+    setNewPlaylistName('');
+    setIsCreating(false);
   };
 
   if (selectedPlaylist) {
     return (
-      <div className="animate-fade-in" style={{ padding: '0 10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
-          <button type="button" className="btn-icon" onClick={() => setSelectedPlaylistId(null)} title="Retour">
-            <X size={20} />
-          </button>
-          <h2 style={{ fontSize: '1.5rem', margin: 0 }}>{selectedPlaylist.name}</h2>
+      <CollectionView
+        kicker="Playlist"
+        title={selectedPlaylist.name}
+        icon={ListMusic}
+        tint="linear-gradient(140deg, #bf5af2, #0a84ff)"
+        tracks={selectedPlaylist.tracks}
+        onPlay={(track, index, list) => onPlayTrack(track, index, list, `Playlist · ${selectedPlaylist.name}`)}
+        onShuffle={() => onShufflePlaylist?.(selectedPlaylist)}
+        onRemoveTrack={(track) => onRemoveFromPlaylist(selectedPlaylist.id, track.id)}
+        removeLabel="Retirer de la playlist"
+        emptyTitle="Cette playlist est vide"
+        emptyHint="Ajoute des titres depuis la recherche, tes favoris ou tes fichiers locaux."
+        headerExtra={
           <button
             type="button"
-            className="btn-pill btn-pill--accent"
-            onClick={() => onPlayPlaylist(selectedPlaylist)}
-            disabled={selectedPlaylist.tracks.length === 0}
-            style={{ marginLeft: 'auto' }}
+            className="btn-pill"
+            style={{ marginTop: '14px' }}
+            onClick={() => setSelectedPlaylistId(null)}
           >
-            <Play size={18} fill="currentColor" />
-            Tout lire
+            <ArrowLeft size={15} /> Toutes les playlists
           </button>
-        </div>
-
-        {selectedPlaylist.tracks.length === 0 ? (
-          <div className="flex-center" style={{ height: '30vh', color: 'var(--text-secondary)' }}>
-            <p>Cette playlist est vide. Ajoute des sons depuis la recherche, tes favoris ou tes fichiers locaux.</p>
-          </div>
-        ) : (
-          <TrackList
-            {...trackListProps}
-            tracks={selectedPlaylist.tracks}
-            onPlay={(track, index) => onPlayTrack(track, index, selectedPlaylist.tracks, `Playlist · ${selectedPlaylist.name}`)}
-            onRemoveTrack={(track) => onRemoveFromPlaylist(selectedPlaylist.id, track.id)}
-            removeTrackLabel="Retirer de la playlist"
-          />
-        )}
-      </div>
+        }
+        {...trackProps}
+      />
     );
   }
 
   return (
-    <div className="animate-fade-in" style={{ padding: '0 10px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
-        <h2 style={{ fontSize: '1.5rem', margin: 0 }}>Mes Playlists</h2>
+    <div className="view-enter">
+      <header className="coll-hero" style={{ paddingBottom: '18px' }}>
+        <div className="coll-hero__meta">
+          <span className="coll-hero__kicker">Ta bibliothèque</span>
+          <h2 className="coll-hero__title">Playlists</h2>
+          <p className="coll-hero__stats">
+            {playlists.length} playlist{playlists.length > 1 ? 's' : ''}
+          </p>
+        </div>
         <button type="button" className="btn-pill btn-pill--accent" onClick={() => setIsCreating(true)}>
-          <Plus size={18} />
-          Nouvelle
+          <Plus size={17} /> Nouvelle playlist
         </button>
-      </div>
+      </header>
 
       {isCreating && (
-        <form onSubmit={handleCreate} className="glass" style={{ display: 'flex', gap: '10px', padding: '16px', borderRadius: '16px', marginBottom: '24px' }}>
-          <input 
+        <form onSubmit={handleCreate} className="pl-create toast-in">
+          <input
             autoFocus
-            type="text" 
-            placeholder="Nom de la playlist..." 
+            type="text"
+            placeholder="Nom de la playlist…"
             value={newPlaylistName}
             onChange={(e) => setNewPlaylistName(e.target.value)}
-            style={{ flex: 1, background: 'rgba(0,0,0,0.2)', border: 'none', borderRadius: '8px', padding: '10px 14px', color: 'white', outline: 'none' }}
+            onKeyDown={(e) => e.key === 'Escape' && setIsCreating(false)}
+            aria-label="Nom de la playlist"
           />
-          <button type="submit" style={{ background: 'var(--accent-color)', color: 'white', border: 'none', borderRadius: '8px', padding: '0 16px', cursor: 'pointer', fontWeight: 600 }}>Créer</button>
-          <button type="button" onClick={() => setIsCreating(false)} style={{ background: 'rgba(255,255,255,0.1)', color: 'white', border: 'none', borderRadius: '8px', padding: '0 16px', cursor: 'pointer' }}>Annuler</button>
+          <button type="submit" className="btn-pill btn-pill--accent" disabled={!newPlaylistName.trim()}>
+            Créer
+          </button>
+          <button type="button" className="btn-pill" onClick={() => setIsCreating(false)}>
+            Annuler
+          </button>
         </form>
       )}
 
       {playlists.length === 0 && !isCreating ? (
-        <div className="flex-center" style={{ height: '40vh', color: 'var(--text-secondary)' }}>
-          <p>Tu n&apos;as pas encore de playlist.</p>
+        <div className="search-empty" style={{ height: '34vh' }}>
+          <ListMusic size={38} strokeWidth={1.5} />
+          <h3>Aucune playlist</h3>
+          <p>Crée ta première playlist pour organiser tes titres.</p>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
-          {playlists.map(pl => (
+        <div className="pl-grid">
+          {playlists.map((pl) => (
             <div
               key={pl.id}
-              className="glass card-hover"
-              style={{ padding: '16px', borderRadius: '16px', cursor: 'pointer', position: 'relative' }}
+              className="pl-card"
               onClick={() => setSelectedPlaylistId(pl.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Enter' && setSelectedPlaylistId(pl.id)}
             >
-              <div style={{ width: '100%', aspectRatio: '1', background: 'rgba(0,0,0,0.3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
-                <Music size={40} color="var(--text-secondary)" />
+              <PlaylistCover playlist={pl} />
+              <div className="pl-card__body">
+                <span className="truncate pl-card__name">{pl.name}</span>
+                <span className="pl-card__count">
+                  {pl.tracks.length} titre{pl.tracks.length > 1 ? 's' : ''}
+                </span>
               </div>
-              <h3 style={{ margin: '0 0 4px', fontSize: '1.1rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{pl.name}</h3>
-              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{pl.tracks.length} titres</p>
-              
               <button
-                onClick={(e) => { e.stopPropagation(); onDeletePlaylist(pl.id); }}
-                style={{ position: 'absolute', top: '24px', right: '24px', background: 'rgba(0,0,0,0.5)', border: 'none', borderRadius: '50%', width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#ff4444' }}
+                type="button"
+                className="btn-icon pl-card__delete"
+                title="Supprimer la playlist"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeletePlaylist(pl.id);
+                }}
               >
-                <Trash2 size={16} />
+                <Trash2 size={15} />
               </button>
             </div>
           ))}

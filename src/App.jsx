@@ -1,19 +1,21 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
-import { Search, Heart, Home, X, Undo2, Download as DownloadIcon, Settings as SettingsIcon, FolderOpen, Users, ListMusic } from 'lucide-react';
-import Player from './components/Player';
-import TrackList from './components/TrackList';
+import { X, Undo2, Download as DownloadIcon, Heart, FolderOpen, FolderPlus } from 'lucide-react';
+import Player, { PLAYER_HEIGHT } from './components/Player';
 import Settings from './components/Settings';
 import AnimatedBackground from './components/AnimatedBackground';
-import DownloadsView from './components/DownloadsView';
+import CollectionView from './components/CollectionView';
 import HomeView from './components/HomeView';
 import ArtistProfileView from './components/ArtistProfileView';
-import LocalFilesView from './components/LocalFilesView';
 import JamView from './components/JamView';
 import PlaylistsView from './components/PlaylistsView';
 import QueueView from './components/QueueView';
 import DownloadToasts from './components/DownloadToasts';
 import TrackListSkeleton from './components/TrackListSkeleton';
-import { TrackArtPlaceholder, RemoteAvatar } from './components/MediaPlaceholder';
+import TitleBar, { TITLE_BAR_HEIGHT } from './components/TitleBar';
+import Sidebar from './components/Sidebar';
+import SearchBar from './components/SearchBar';
+import SearchResults from './components/SearchResults';
+import { TrackArtPlaceholder } from './components/MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from './utils/soundcloudArtist';
 import useDownloadManager from './hooks/useDownloadManager';
 import { buildShuffleOrder, nextIndexFor, prevIndexFor, upcomingIndices } from './utils/playbackOrder';
@@ -27,15 +29,8 @@ const emptyDownloadsLibrary = {
 
 const LOCAL_PATHS_STORAGE_KEY = 'aura_local_library_paths';
 
-const NAV_TABS = [
-  { key: 'home', label: 'Accueil', Icon: Home },
-  { key: 'favorites', label: 'Favoris', Icon: Heart },
-  { key: 'downloads', label: 'Téléchargés', Icon: DownloadIcon },
-  { key: 'local', label: 'Fichiers locaux', Icon: FolderOpen },
-  { key: 'playlists', label: 'Playlists', Icon: ListMusic },
-  { key: 'jam', label: 'Jam', Icon: Users },
-  { key: 'settings', label: 'Paramètres', Icon: SettingsIcon }
-];
+/** En dessous, la barre latérale passe en icônes seules. */
+const SIDEBAR_COMPACT_BREAKPOINT = 1080;
 
 function localPathToTrack(absPath) {
   const norm = typeof absPath === 'string' ? absPath.trim() : '';
@@ -85,6 +80,7 @@ export default function App() {
   const [tracks, setTracks] = useState([]);
   const [searchArtists, setSearchArtists] = useState([]);
   const [searchSubView, setSearchSubView] = useState('list');
+  const [searchFilter, setSearchFilter] = useState('all');
   const [artistProfile, setArtistProfile] = useState(null);
   const [artistProfileTracks, setArtistProfileTracks] = useState([]);
   const [artistProfileLoading, setArtistProfileLoading] = useState(false);
@@ -96,10 +92,24 @@ export default function App() {
   const [reverb, setReverb] = useState(0);
   const [reverbEnabled, setReverbEnabled] = useState(false);
   const [djMode, setDjMode] = useState(false);
+  const [crossfadeSeconds, setCrossfadeSeconds] = useState(
+    () => Number(localStorage.getItem('aura_crossfade')) || 3
+  );
+  const [autoRepair, setAutoRepair] = useState(
+    () => localStorage.getItem('aura_auto_repair') !== 'false'
+  );
+  const [showNotifications, setShowNotifications] = useState(
+    () => localStorage.getItem('aura_dl_notifications') !== 'false'
+  );
   const [updateStatus, setUpdateStatus] = useState(null); // 'available', 'downloaded', null
   const [downloadsLibrary, setDownloadsLibrary] = useState(emptyDownloadsLibrary);
   const [downloadsLoading, setDownloadsLoading] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
+  const [sidebarCompact, setSidebarCompact] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < SIDEBAR_COMPACT_BREAKPOINT
+  );
+  /** Incrémenté pour demander à PlaylistsView d'ouvrir son formulaire de création. */
+  const [playlistCreateRequest, setPlaylistCreateRequest] = useState(0);
   const [jamUsername, setJamUsername] = useState(() => localStorage.getItem('aura_jam_username') || '');
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playlists, setPlaylists] = useState(() => {
@@ -144,6 +154,12 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    const onResize = () => setSidebarCompact(window.innerWidth < SIDEBAR_COMPACT_BREAKPOINT);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   /** Position de lecture : ref à chaque frame, state limité à ~2 Hz pour la Jam. */
   const handlePositionUpdate = useCallback((pos) => {
     playbackPositionRef.current = pos;
@@ -173,7 +189,6 @@ export default function App() {
 
   const [isMiniPlayer, setIsMiniPlayer] = useState(false);
   const [showLargeCover, setShowLargeCover] = useState(false);
-  const [favoritesSearch, setFavoritesSearch] = useState('');
   const [streamUnavailableNotice, setStreamUnavailableNotice] = useState(null);
   const mainScrollRef = useRef(null);
   const streamNoticeScrollRestoreRef = useRef(null);
@@ -336,27 +351,76 @@ export default function App() {
     localStorage.setItem('aura_djmode', val);
   };
 
+  const handleCrossfadeChange = (val) => {
+    setCrossfadeSeconds(val);
+    localStorage.setItem('aura_crossfade', String(val));
+  };
+
+  const handleAutoRepairChange = (val) => {
+    setAutoRepair(val);
+    localStorage.setItem('aura_auto_repair', String(val));
+  };
+
+  const handleNotificationsChange = (val) => {
+    setShowNotifications(val);
+    localStorage.setItem('aura_dl_notifications', String(val));
+  };
+
+  const clearRecentTracks = () => {
+    setRecentTracks([]);
+    localStorage.removeItem('aura_recent_tracks');
+  };
+
+  const clearSearchHistory = () => {
+    localStorage.removeItem('aura_search_history');
+  };
+
   const handleSetJamUsername = (name) => {
     setJamUsername(name);
     localStorage.setItem('aura_jam_username', name);
   };
 
-  /** Synchronisation Jam — appelée par JamView quand un host state arrive (listener uniquement) */
+  /** Au-delà de cet écart avec l'hôte, on se recale (en secondes). */
+  const JAM_DRIFT_TOLERANCE = 2.5;
+
+  /**
+   * Synchronisation Jam côté auditeur : piste, lecture/pause et position.
+   * Appelée à chaque état publié par l'hôte (~2 fois par seconde).
+   */
   const handleJamSync = ({ track, playing, position, hostTimestamp }) => {
     if (!track) return;
-    // Ne pas synchro si on est host
-    // Vérifier si le morceau a changé
-    if (!currentTrack || currentTrack.id !== track.id) {
-      // Nouveau morceau : lancer la lecture
+
+    // Latence réseau : l'hôte a avancé depuis l'envoi du message.
+    const latency = hostTimestamp ? Math.max(0, (Date.now() - hostTimestamp) / 1000) : 0;
+    const expected = (Number(position) || 0) + (playing ? latency : 0);
+
+    // 1. Nouvelle piste → on la charge en reprenant à la position de l'hôte.
+    if (!currentTrack || String(currentTrack.id) !== String(track.id)) {
       setPlaybackManualEpoch((n) => n + 1);
+      setResumeAt(expected > 1 ? expected : 0);
+      setPlayingFromQueue(false);
       setCurrentTrack(track);
       setPlaylistContext([track]);
       setCurrentIndex(0);
+      setContextLabel('Jam');
+      return;
     }
-    // Synchro play/pause
+
+    const controls = playerControlsRef.current;
+    if (!controls) return;
+
+    // 2. Aligner lecture / pause sur l'hôte.
     if (playing !== isAudioPlaying) {
-      // toggle play via keyboard event simulation n'est pas propre,
-      // on laisse le Player gérer son état, on sync juste les infos
+      controls.togglePlay();
+      return;
+    }
+
+    // 3. Recaler la position si on a dérivé.
+    if (playing) {
+      const actual = controls.getPosition?.() ?? 0;
+      if (Math.abs(actual - expected) > JAM_DRIFT_TOLERANCE) {
+        controls.seek(expected);
+      }
     }
   };
 
@@ -459,16 +523,17 @@ export default function App() {
     openArtistProfile(permalink);
   };
 
-  const handleSearch = async (e) => {
-    if (e) e.preventDefault();
-    if (!searchQuery.trim()) return;
+  /** `query` optionnel : la barre de recherche lance la requête sans passer par l'état. */
+  const handleSearch = async (query) => {
+    const q = (typeof query === 'string' ? query : searchQuery).trim();
+    if (!q) return;
 
     setSearchSubView('list');
     setArtistProfile(null);
     setArtistProfileTracks([]);
     setIsLoading(true);
     try {
-      const data = await window.electronAPI.searchSoundCloud(searchQuery);
+      const data = await window.electronAPI.searchSoundCloud(q);
       if (data && typeof data === 'object' && Array.isArray(data.tracks)) {
         setTracks(data.tracks);
         setSearchArtists(Array.isArray(data.artists) ? data.artists : []);
@@ -525,7 +590,7 @@ export default function App() {
 
   /** Une piste bloquée sur SoundCloud n'est jouable qu'une fois récupérée localement. */
   const needsRepair = (track) =>
-    !!track && !track.localPath && !track.isLocalFile && !!track.unavailable && track.id != null;
+    autoRepair && !!track && !track.localPath && !track.isLocalFile && !!track.unavailable && track.id != null;
 
   const startPlayback = (track, index, contextList, label) => {
     const list = Array.isArray(contextList) && contextList.length > 0 ? contextList : [track];
@@ -670,6 +735,14 @@ export default function App() {
     pushRecent(track);
   };
 
+  /** Lance une collection dans un ordre aléatoire, quel que soit l'état du bouton shuffle. */
+  const shufflePlay = (list, label) => {
+    if (!Array.isArray(list) || list.length === 0) return;
+    const index = Math.floor(Math.random() * list.length);
+    if (!shuffle) toggleShuffle();
+    playTrack(list[index], index, list, label);
+  };
+
   const toggleShuffle = () => {
     const next = !shuffle;
     localStorage.setItem('aura_shuffle', String(next));
@@ -752,7 +825,7 @@ export default function App() {
     const track = currentTrack;
     if (!track) return;
 
-    const canRepair = !track.isLocalFile && !track.localPath && track.id != null;
+    const canRepair = autoRepair && !track.isLocalFile && !track.localPath && track.id != null;
     if (canRepair) {
       const resumeTarget = playbackPositionRef.current;
       setResumeAt(resumeTarget > 2 ? resumeTarget : 0);
@@ -797,18 +870,6 @@ export default function App() {
     }
   };
 
-  const currentList = activeTab === 'downloads'
-      ? downloadsLibrary.tracks
-      : activeTab === 'favorites'
-      ? favorites.filter(t => {
-        if (!favoritesSearch) return true;
-        const search = favoritesSearch.toLowerCase();
-        const titleMatch = t.title ? t.title.toLowerCase().includes(search) : false;
-        const artistMatch = t.artist ? t.artist.toLowerCase().includes(search) : false;
-        return titleMatch || artistMatch;
-      })
-      : [];
-
   /** Props partagées par toutes les listes de pistes. */
   const trackListCommonProps = {
     currentTrack,
@@ -842,6 +903,21 @@ export default function App() {
     <div style={{ position: 'relative', width: '100%', height: '100vh', maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
       {/* Dynamic Background */}
       <AnimatedBackground imageUrl={currentTrack?.artwork} />
+
+      {/* Barre de titre : zone de déplacement + recherche toujours accessible */}
+      <TitleBar>
+        {!isMiniPlayer && (
+          <SearchBar
+            value={searchQuery}
+            onChange={setSearchQuery}
+            onSearch={(q) => {
+              setActiveTab('search');
+              handleSearch(q);
+            }}
+            onFocusSearch={() => setActiveTab('search')}
+          />
+        )}
+      </TitleBar>
 
       {updateStatus && (
         <div
@@ -982,87 +1058,31 @@ export default function App() {
       {!isMiniPlayer && (
         <div
           style={{
-            width: '100%',
-            maxWidth: '1200px',
-            margin: '0 auto',
-            padding: 'clamp(16px, 3vw, 40px) clamp(12px, 2vw, 20px)',
-            height: '100vh',
             display: 'flex',
-            flexDirection: 'column',
+            // La barre du lecteur est fixée en bas : on lui réserve sa hauteur
+            // pour que le bas de la navigation (Paramètres) reste atteignable.
+            height: `calc(100vh - ${TITLE_BAR_HEIGHT}px - ${currentTrack ? PLAYER_HEIGHT : 0}px)`,
+            marginTop: `${TITLE_BAR_HEIGHT}px`,
             boxSizing: 'border-box',
-            minWidth: 0
+            minWidth: 0,
+            transition: 'height var(--dur-med) var(--ease-out)'
           }}
         >
-          
-          <header
-            style={{
-              marginBottom: 'clamp(16px, 3vw, 30px)',
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'flex-start',
-              justifyContent: 'space-between',
-              gap: '14px 18px',
-              WebkitAppRegion: 'drag',
-              width: '100%',
-              minWidth: 0
+          <Sidebar
+            activeTab={activeTab}
+            compact={sidebarCompact}
+            counts={{ favorites: favorites.length, downloads: downloadsLibrary.count, playlists: playlists.length }}
+            onCreatePlaylist={() => {
+              setActiveTab('playlists');
+              setPlaylistCreateRequest((n) => n + 1);
             }}
-          >
-            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
-              <h1 className="text-gradient" style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Aura Player</h1>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
-                {NAV_TABS.map(({ key, label, Icon }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    className={`glass nav-pill${activeTab === key ? ' is-active' : ''}`}
-                    onClick={() => {
-                      setActiveTab(key);
-                      if (key === 'downloads') loadDownloadedLibrary();
-                    }}
-                  >
-                    <Icon size={16} /> {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            
-            <div
-              style={{
-                flex: '1 1 200px',
-                minWidth: 0,
-                maxWidth: '100%',
-                WebkitAppRegion: 'no-drag',
-                display: 'flex',
-                justifyContent: 'flex-end',
-                alignItems: 'flex-start',
-                gap: '12px'
-              }}
-            >
-                <form 
-                  onSubmit={(e) => { e.preventDefault(); setActiveTab('search'); handleSearch(); }} 
-                  className="glass" 
-                  style={{ display: 'flex', alignItems: 'center', padding: '10px 16px', width: '100%', maxWidth: '400px', borderRadius: '30px', boxSizing: 'border-box' }}
-                >
-                  <Search size={20} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
-                  <input 
-                    type="text" 
-                    placeholder="Rechercher musiques, artistes..." 
-                    value={searchQuery} 
-                    onChange={(e) => setSearchQuery(e.target.value)} 
-                    onFocus={() => setActiveTab('search')}
-                    style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', minWidth: 0, marginLeft: '10px', fontSize: '1rem' }} 
-                  />
-                </form>
+            onSelect={(key) => {
+              setActiveTab(key);
+              if (key === 'downloads') loadDownloadedLibrary();
+            }}
+          />
 
-                {activeTab === 'favorites' && (
-                  <div className="glass" style={{ display: 'flex', alignItems: 'center', padding: '10px 16px', width: '100%', maxWidth: '250px', borderRadius: '30px', boxSizing: 'border-box' }}>
-                    <Search size={18} color="var(--text-secondary)" style={{ flexShrink: 0 }} />
-                    <input type="text" placeholder="Filtrer favoris..." value={favoritesSearch} onChange={(e) => setFavoritesSearch(e.target.value)} style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', width: '100%', minWidth: 0, marginLeft: '10px', fontSize: '0.9rem' }} />
-                  </div>
-                )}
-            </div>
-          </header>
-
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <main
             ref={mainScrollRef}
             onScroll={(e) => setIsScrolled(e.target.scrollTop > 10)}
@@ -1073,8 +1093,7 @@ export default function App() {
               overflowY: 'auto',
               overflowX: 'hidden',
               overflowAnchor: 'none',
-              paddingRight: '10px',
-              paddingBottom: '120px',
+              padding: '10px clamp(16px, 3vw, 34px) 40px',
               WebkitAppRegion: 'no-drag',
               maskImage: isScrolled ? 'linear-gradient(to bottom, transparent 0px, black 30px, black calc(100% - 30px), transparent 100%)' : 'linear-gradient(to bottom, black 0px, black calc(100% - 30px), transparent 100%)',
               WebkitMaskImage: isScrolled ? 'linear-gradient(to bottom, transparent 0px, black 30px, black calc(100% - 30px), transparent 100%)' : 'linear-gradient(to bottom, black 0px, black calc(100% - 30px), transparent 100%)',
@@ -1082,11 +1101,17 @@ export default function App() {
             }}
           >
             {activeTab === 'settings' ? (
-              <Settings 
-                eqBands={eqBands} setEqBands={handleEqChange} 
+              <Settings
+                eqBands={eqBands} setEqBands={handleEqChange}
                 reverb={reverb} setReverb={handleReverbChange}
                 reverbEnabled={reverbEnabled} setReverbEnabled={handleReverbEnabledChange}
                 djMode={djMode} setDjMode={handleDjModeChange}
+                crossfadeSeconds={crossfadeSeconds} setCrossfadeSeconds={handleCrossfadeChange}
+                autoRepair={autoRepair} setAutoRepair={handleAutoRepairChange}
+                showNotifications={showNotifications} setShowNotifications={handleNotificationsChange}
+                downloadsLibrary={downloadsLibrary}
+                onClearRecent={clearRecentTracks}
+                onClearSearchHistory={clearSearchHistory}
                 mergeSpotifyLikesIntoFavorites={mergeSpotifyLikesIntoFavorites}
               />
             ) : activeTab === 'home' ? (
@@ -1103,13 +1128,6 @@ export default function App() {
                 onNavigateDownloads={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }}
                 onNavigateLocal={() => setActiveTab('local')}
               />
-            ) : activeTab === 'search' && isLoading ? (
-              <div className="view-enter">
-                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-secondary)' }}>
-                  Recherche en cours…
-                </h3>
-                <TrackListSkeleton rows={7} />
-              </div>
             ) : activeTab === 'search' && searchSubView === 'artist' ? (
               <ArtistProfileView
                 {...trackListCommonProps}
@@ -1127,88 +1145,43 @@ export default function App() {
                 onOpenArtistFromTrack={openArtistFromTrack}
               />
             ) : activeTab === 'search' ? (
-              <>
-                {searchArtists.length > 0 && (
-                  <div style={{ marginBottom: '28px' }}>
-                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-primary)' }}>
-                      Artistes
-                    </h3>
-                    <div
-                      className="custom-scrollbar"
-                      style={{
-                        display: 'flex',
-                        gap: '12px',
-                        overflowX: 'auto',
-                        overflowY: 'hidden',
-                        paddingBottom: '8px',
-                        WebkitOverflowScrolling: 'touch',
-                        overscrollBehaviorX: 'contain',
-                        contain: 'content'
-                      }}
-                    >
-                      {searchArtists.map((a) => (
-                        <button
-                          key={a.id}
-                          type="button"
-                          onClick={() => openArtistProfile(a.permalinkUrl)}
-                          style={{
-                            flex: '0 0 auto',
-                            width: '112px',
-                            border: 'none',
-                            borderRadius: '14px',
-                            padding: '12px 10px',
-                            cursor: 'pointer',
-                            textAlign: 'center',
-                            backgroundColor: 'rgba(255,255,255,0.06)',
-                            color: 'var(--text-primary)',
-                            WebkitAppRegion: 'no-drag',
-                            contain: 'layout style paint',
-                            isolation: 'isolate'
-                          }}
-                        >
-                          <RemoteAvatar
-                            url={a.avatarUrl}
-                            size={72}
-                            variant="list"
-                            wrapperStyle={{ marginBottom: '10px' }}
-                          />
-                          <span className="truncate" style={{ fontSize: '0.82rem', fontWeight: 600, display: 'block' }}>
-                            {a.fullName || a.username}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {tracks.length === 0 && searchArtists.length === 0 ? (
-                  <div className="flex-center" style={{ height: '40vh', color: 'var(--text-secondary)' }}>
-                    <p>Aucun résultat.</p>
-                  </div>
-                ) : tracks.length === 0 ? (
-                  <p style={{ textAlign: 'center', color: 'var(--text-secondary)', marginTop: '24px' }}>
-                    Aucune piste pour cette recherche.
-                  </p>
-                ) : (
-                  <>
-                    <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-primary)' }}>
-                      Pistes
-                    </h3>
-                    <TrackList
-                      {...trackListCommonProps}
-                      tracks={tracks}
-                      onPlay={(track, index) => playTrack(track, index, tracks, `Recherche · ${searchQuery}`)}
-                      onOpenArtist={openArtistFromTrack}
-                    />
-                  </>
-                )}
-              </>
+              <SearchResults
+                query={searchQuery}
+                loading={isLoading}
+                tracks={tracks}
+                artists={searchArtists}
+                filter={searchFilter}
+                onFilterChange={setSearchFilter}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onQueueLast={(track) => enqueue(track)}
+                onOpenArtist={openArtistProfile}
+                onPlay={(track, index, list) => playTrack(track, index, list, `Recherche · ${searchQuery}`)}
+              />
             ) : activeTab === 'local' ? (
-              <LocalFilesView
-                {...trackListCommonProps}
+              <CollectionView
+                kicker="Depuis ton disque"
+                title="Fichiers locaux"
+                description="Des fichiers audio lus directement depuis ton disque, sans passer par SoundCloud."
+                icon={FolderOpen}
+                tint="linear-gradient(140deg, #5e5ce6, #0a84ff)"
                 tracks={localLibraryTracks}
-                onPlay={(track, index) => playTrack(track, index, localLibraryTracks, 'Fichiers locaux')}
-                onImport={handleImportLocalFiles}
-                onOpenArtist={openArtistFromTrack}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onQueueLast={(t) => enqueue(t)}
+                onPlay={(track, index, list) => playTrack(track, index, list, 'Fichiers locaux')}
+                onShuffle={() => shufflePlay(localLibraryTracks, 'Fichiers locaux')}
+                emptyTitle="Aucun fichier importé"
+                emptyHint="Utilise « Ajouter des fichiers » pour construire ta bibliothèque locale."
+                actions={
+                  <button type="button" className="btn-pill" onClick={handleImportLocalFiles}>
+                    <FolderPlus size={16} /> Ajouter des fichiers
+                  </button>
+                }
               />
             ) : activeTab === 'playlists' ? (
               <PlaylistsView
@@ -1218,26 +1191,53 @@ export default function App() {
                 onDeletePlaylist={handleDeletePlaylist}
                 onPlayPlaylist={(pl) => playTrack(pl.tracks[0], 0, pl.tracks, `Playlist · ${pl.name}`)}
                 onPlayTrack={playTrack}
+                onShufflePlaylist={(pl) => shufflePlay(pl.tracks, `Playlist · ${pl.name}`)}
                 onRemoveFromPlaylist={removeFromPlaylist}
+                createRequest={playlistCreateRequest}
+                onQueueLast={(t) => enqueue(t)}
               />
             ) : activeTab === 'downloads' ? (
               downloadsLoading ? (
                 <TrackListSkeleton rows={5} />
               ) : (
-                <DownloadsView
-                  library={downloadsLibrary}
+                <CollectionView
+                  kicker="Disponible hors connexion"
+                  title="Téléchargements"
+                  icon={DownloadIcon}
+                  tint="linear-gradient(140deg, #30d158, #0a84ff)"
+                  tracks={downloadsLibrary.tracks}
                   currentTrack={currentTrack}
                   isAudioPlaying={isAudioPlaying}
-                  onPlay={(track, index) => playTrack(track, index, downloadsLibrary.tracks, 'Téléchargés')}
-                  onDelete={handleDeleteDownloadedTrack}
+                  favorites={favorites}
+                  toggleFavorite={toggleFavorite}
+                  onQueueLast={(t) => enqueue(t)}
+                  onRemoveTrack={handleDeleteDownloadedTrack}
+                  removeLabel="Supprimer le téléchargement"
+                  onPlay={(track, index, list) => playTrack(track, index, list, 'Téléchargements')}
+                  onShuffle={() => shufflePlay(downloadsLibrary.tracks, 'Téléchargements')}
+                  emptyTitle="Aucun son téléchargé"
+                  emptyHint="Les titres que tu gardes en local apparaîtront ici."
                 />
               )
             ) : activeTab === 'favorites' ? (
-              <TrackList
-                {...trackListCommonProps}
-                tracks={currentList}
-                onPlay={(track, index) => playTrack(track, index, currentList, 'Favoris')}
-                onOpenArtist={openArtistFromTrack}
+              <CollectionView
+                kicker="Ta collection"
+                title="Titres likés"
+                icon={Heart}
+                tint="linear-gradient(140deg, #ff375f, #5e5ce6)"
+                tracks={favorites}
+                currentTrack={currentTrack}
+                isAudioPlaying={isAudioPlaying}
+                favorites={favorites}
+                toggleFavorite={toggleFavorite}
+                onQueueLast={(t) => enqueue(t)}
+                onDownload={downloads.start}
+                downloadStates={downloads.downloads}
+                showDownload
+                onPlay={(track, index, list) => playTrack(track, index, list, 'Favoris')}
+                onShuffle={() => shufflePlay(favorites, 'Favoris')}
+                emptyTitle="Aucun favori"
+                emptyHint="Appuie sur le cœur d'un titre pour le retrouver ici."
               />
             ) : null}
 
@@ -1253,7 +1253,8 @@ export default function App() {
                 onSetUsername={handleSetJamUsername}
               />
             </div>
-          </main>
+            </main>
+          </div>
         </div>
       )}
 
@@ -1292,6 +1293,8 @@ export default function App() {
       <QueueView
         open={showQueue}
         onClose={() => setShowQueue(false)}
+        topOffset={TITLE_BAR_HEIGHT}
+        bottomOffset={currentTrack && !isMiniPlayer ? PLAYER_HEIGHT : 0}
         currentTrack={currentTrack}
         isAudioPlaying={isAudioPlaying}
         queue={queue}
@@ -1304,7 +1307,7 @@ export default function App() {
       />
 
       <DownloadToasts
-        downloads={downloads.downloads}
+        downloads={showNotifications ? downloads.downloads : {}}
         onRetry={(entry) => downloads.retry(entry)}
         onDismiss={downloads.dismiss}
         bottomOffset={currentTrack && !isMiniPlayer ? 118 : 24}
@@ -1327,6 +1330,7 @@ export default function App() {
         reverb={reverb}
         reverbEnabled={reverbEnabled}
         djMode={djMode}
+        crossfadeSeconds={crossfadeSeconds}
         onPlaybackChange={setIsAudioPlaying}
         onOpenArtist={openArtistFromTrack}
         onPositionUpdate={handlePositionUpdate}
@@ -1339,6 +1343,7 @@ export default function App() {
         queueCount={queue.length}
         onToggleQueue={() => setShowQueue((v) => !v)}
         isRepairing={currentTrack ? downloads.isDownloading(currentTrack.id) : false}
+        titleBarOffset={TITLE_BAR_HEIGHT}
       />
     </div>
   );

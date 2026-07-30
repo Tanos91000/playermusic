@@ -78,32 +78,44 @@ function QuickPlayCard({ track, index, list, onPlay, currentTrack, isAudioPlayin
           </div>
         )}
       </div>
-      <div style={{ flex: 1, minWidth: 0, padding: '0 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div style={{ fontWeight: 700, fontSize: '0.95rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isCurrent ? 'var(--accent-color)' : 'var(--text-primary)' }}>
-          {track.title}
-        </div>
-        <div 
-          className="quick-play-icon"
-          style={{ 
-            width: '40px', 
-            height: '40px', 
-            borderRadius: '50%', 
-            background: 'var(--accent-color)', 
-            display: 'flex', 
-            alignItems: 'center', 
-            justifyContent: 'center',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-            opacity: 0,
-            transition: 'opacity 0.2s',
-            marginLeft: '10px'
+      <div style={{ flex: 1, minWidth: 0, padding: '0 12px 0 16px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div
+          className="truncate"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            fontWeight: 700,
+            fontSize: '0.95rem',
+            color: isCurrent ? 'var(--accent-color)' : 'var(--text-primary)'
           }}
         >
-           <Play fill="#fff" color="#fff" size={20} style={{ marginLeft: '2px' }} />
+          {track.title}
+        </div>
+        {/* flexShrink: 0 — sans ça le bouton s'écrasait quand le titre était long */}
+        <div
+          className="quick-play-icon"
+          style={{
+            width: '36px',
+            height: '36px',
+            flexShrink: 0,
+            borderRadius: '50%',
+            background: 'var(--accent-color)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: '0 4px 14px var(--accent-glow)',
+            opacity: 0,
+            transform: 'scale(0.8)',
+            transition: 'opacity var(--dur-med) var(--ease-out), transform var(--dur-med) var(--ease-spring)'
+          }}
+        >
+          <Play fill="#fff" color="#fff" size={17} style={{ marginLeft: '2px' }} />
         </div>
       </div>
       <style>{`
         .quick-play-btn:hover .quick-play-icon {
           opacity: 1 !important;
+          transform: scale(1) !important;
         }
       `}</style>
     </button>
