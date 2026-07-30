@@ -27,6 +27,7 @@
       "output": "dist-electron",
       "buildResources": "icons"
     },
+    "afterPack": "scripts/adhoc-sign-mac.js",
     "npmRebuild": false,
     "files": [
       "dist/**/*",
