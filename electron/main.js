@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, nativeImage, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, shell, dialog, Menu, globalShortcut } = require('electron');
 const path = require('path');
 const { pathToFileURL, fileURLToPath } = require('url');
 const http = require('http');
@@ -324,6 +324,27 @@ function setupAutoUpdater() {
   }, 5000);
 }
 
+/** Touches média du clavier (play/pause, piste suivante/précédente). */
+function registerMediaKeys() {
+  const bindings = {
+    MediaPlayPause: 'play-pause',
+    MediaNextTrack: 'next',
+    MediaPreviousTrack: 'previous',
+    MediaStop: 'stop'
+  };
+
+  for (const [accelerator, action] of Object.entries(bindings)) {
+    try {
+      globalShortcut.register(accelerator, () => {
+        if (!mainWindow || mainWindow.isDestroyed()) return;
+        mainWindow.webContents.send('media-key', action);
+      });
+    } catch (err) {
+      console.warn('[Aura] media key indisponible:', accelerator, err?.message || err);
+    }
+  }
+}
+
 function createWindow(icon) {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -398,6 +419,8 @@ app.whenReady().then(() => {
 
   createWindow(appIcon);
 
+  registerMediaKeys();
+
   setupAutoUpdater();
 
   app.on('activate', () => {
@@ -409,6 +432,10 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
   discordPresence.shutdown().catch(() => {});
+});
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on('window-all-closed', () => {

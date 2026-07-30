@@ -57,22 +57,15 @@ export default function DownloadsView({ library, currentTrack, isAudioPlaying = 
             <div
               key={track.id}
               onClick={() => onPlay(track, index)}
-              className="glass animate-fade-in"
+              className="glass track-row animate-fade-in"
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 padding: '12px 20px',
                 cursor: 'pointer',
-                transition: 'all 0.2s ease',
                 backgroundColor: isCurrentTrack ? 'var(--surface-hover)' : 'var(--surface-color)',
                 borderColor: isCurrentTrack ? 'var(--accent-color)' : 'var(--border-color)',
                 animationDelay: `${index * 0.05}s`
-              }}
-              onMouseEnter={(e) => {
-                if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
-              }}
-              onMouseLeave={(e) => {
-                if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
               }}
             >
               <div
@@ -119,12 +112,14 @@ export default function DownloadsView({ library, currentTrack, isAudioPlaying = 
                   {formatDuration(track.duration)}
                 </span>
                 <button
+                  type="button"
+                  className="btn-icon row-reveal"
                   onClick={(e) => {
                     e.stopPropagation();
                     onDelete(track);
                   }}
-                  title="Supprimer"
-                  style={{ background: 'none', border: 'none', color: '#ff6b6b', cursor: 'pointer', padding: '6px', display: 'flex', alignItems: 'center' }}
+                  title="Supprimer le téléchargement"
+                  style={{ color: 'var(--danger-color)' }}
                 >
                   <Trash2 size={18} />
                 </button>

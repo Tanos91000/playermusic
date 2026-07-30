@@ -6,6 +6,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resizeWindow: (width, height, isMini) => ipcRenderer.invoke('resize-window', { width, height, isMini }),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   downloadTrack: (track) => ipcRenderer.invoke('download-track', track),
+  onDownloadProgress: (callback) => {
+    ipcRenderer.removeAllListeners('download-progress');
+    ipcRenderer.on('download-progress', (_event, payload) => callback(payload));
+  },
+  onMediaKey: (callback) => {
+    ipcRenderer.removeAllListeners('media-key');
+    ipcRenderer.on('media-key', (_event, action) => callback(action));
+  },
   getDownloadedTracks: () => ipcRenderer.invoke('get-downloaded-tracks'),
   getDownloadLibrary: () => ipcRenderer.invoke('get-download-library'),
   deleteDownloadedTrack: (trackId) => ipcRenderer.invoke('delete-downloaded-track', trackId),

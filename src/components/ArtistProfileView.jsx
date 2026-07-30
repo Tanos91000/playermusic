@@ -22,11 +22,7 @@ export default function ArtistProfileView({
   onBack,
   onPlay,
   onOpenArtistFromTrack,
-  currentTrack,
-  isAudioPlaying,
-  favorites,
-  toggleFavorite,
-  onTrackDownloaded
+  ...trackListProps
 }) {
   if (loading && !profile) {
     return (
@@ -163,13 +159,9 @@ export default function ArtistProfileView({
         <div style={{ color: 'var(--text-secondary)', padding: '24px', textAlign: 'center' }}>Chargement des pistes…</div>
       ) : (
         <TrackList
+          {...trackListProps}
           tracks={tracks}
           onPlay={(track, index) => onPlay(track, index, tracks)}
-          currentTrack={currentTrack}
-          isAudioPlaying={isAudioPlaying}
-          favorites={favorites}
-          toggleFavorite={toggleFavorite}
-          onTrackDownloaded={onTrackDownloaded}
           onOpenArtist={onOpenArtistFromTrack}
         />
       )}

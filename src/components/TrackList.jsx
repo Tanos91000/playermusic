@@ -1,12 +1,29 @@
-import { Heart, AlertCircle, Download, Check, Loader2, MoreVertical, Plus } from 'lucide-react';
+import { Heart, AlertCircle, Download, Check, Loader2, MoreVertical, ListPlus, CornerDownRight, User, Trash2 } from 'lucide-react';
 import { useState, useRef, useEffect } from 'react';
 import PlayingIndicator from './PlayingIndicator';
 import { TrackArtPlaceholder } from './MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from '../utils/soundcloudArtist';
 import { formatStreamCount } from '../utils/formatPlayback';
 
-export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying = false, favorites, toggleFavorite, onTrackDownloaded, onOpenArtist, playlists = [], onAddToPlaylist }) {
-  const [downloadingIds, setDownloadingIds] = useState(new Set());
+export default function TrackList({
+  tracks,
+  onPlay,
+  currentTrack,
+  isAudioPlaying = false,
+  favorites,
+  toggleFavorite,
+  onTrackDownloaded,
+  onOpenArtist,
+  playlists = [],
+  onAddToPlaylist,
+  downloadStates = {},
+  onDownload,
+  onQueueNext,
+  onQueueLast,
+  onRemoveTrack,
+  removeTrackLabel = 'Retirer de la liste'
+}) {
+  const [fallbackDownloadingIds, setFallbackDownloadingIds] = useState(new Set());
   const [menuOpenId, setMenuOpenId] = useState(null);
   const menuRef = useRef(null);
 
@@ -28,34 +45,32 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
     );
   }
 
+  /**
+   * Le gestionnaire partagé (progression + notifications) est utilisé dès qu'il
+   * est fourni ; sinon on retombe sur un appel IPC direct.
+   */
   const handleDownload = async (e, track) => {
     e.stopPropagation();
-    if (downloadingIds.has(track.id)) return;
 
-    setDownloadingIds(prev => new Set(prev).add(track.id));
+    if (typeof onDownload === 'function') {
+      onDownload(track);
+      return;
+    }
+
+    if (fallbackDownloadingIds.has(track.id)) return;
+    setFallbackDownloadingIds(prev => new Set(prev).add(track.id));
     try {
       const res = await window.electronAPI.downloadTrack(track);
       if (res?.success && res.localPath) {
-        track.unavailable = false;
-        track.isFixed = true;
-        track.localPath = res.localPath;
-        if (onTrackDownloaded) onTrackDownloaded(track, res);
-      } else if (res?.success === false) {
-        const detail = res.error || 'Erreur inconnue';
-        alert(`Erreur lors du téléchargement :\n${String(detail).slice(0, 1200)}`);
+        onTrackDownloaded?.(track, res);
       } else {
-        alert('Réponse inattendue du téléchargement. Réessaie ou ouvre la console (DevTools).');
+        alert(`Erreur lors du téléchargement :\n${String(res?.error || 'Erreur inconnue').slice(0, 1200)}`);
       }
     } catch (err) {
       console.error('Failed to download track:', err);
-      const detail = err?.message || String(err);
-      alert(
-        detail
-          ? `Erreur lors du téléchargement :\n${String(detail).slice(0, 400)}`
-          : 'Erreur lors du téléchargement. Réessaie plus tard.'
-      );
+      alert(`Erreur lors du téléchargement :\n${String(err?.message || err).slice(0, 400)}`);
     } finally {
-      setDownloadingIds(prev => {
+      setFallbackDownloadingIds(prev => {
         const next = new Set(prev);
         next.delete(track.id);
         return next;
@@ -73,22 +88,140 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
     const s = formatStreamCount(playbackCount);
     return s == null ? null : `${s} lectures`;
   };
-  const downloadBtnStyle = (isUnavailable, isDownloading, accentUnavailable) => ({
-    background: isDownloading ? 'rgba(255,255,255,0.06)' : accentUnavailable ? 'var(--accent-color)' : 'rgba(255,255,255,0.1)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '22px',
-    padding: '8px 20px',
-    fontSize: '0.8rem',
-    fontWeight: 600,
-    cursor: isDownloading ? 'default' : 'pointer',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: '8px',
-    ...(isUnavailable ? { minWidth: '160px' } : {}),
-    justifyContent: 'center',
-    transition: 'opacity 0.2s, transform 0.15s'
-  });
+
+  const downloadState = (track) => {
+    const entry = downloadStates?.[track.id];
+    const active = !!entry && entry.stage !== 'done' && entry.stage !== 'error';
+    return {
+      active: active || fallbackDownloadingIds.has(track.id),
+      percent: typeof entry?.percent === 'number' ? Math.round(entry.percent) : null,
+      failed: entry?.stage === 'error'
+    };
+  };
+
+  const renderMenu = (track) => {
+    const canQueue = typeof onQueueNext === 'function' || typeof onQueueLast === 'function';
+    const canOpenArtist = typeof onOpenArtist === 'function' && !!resolveArtistPermalinkUrl(track);
+    const canRemove = typeof onRemoveTrack === 'function';
+    if (!canQueue && playlists.length === 0 && !canOpenArtist && !canRemove) return null;
+
+    const itemStyle = {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '8px',
+      width: '100%',
+      textAlign: 'left',
+      background: 'none',
+      border: 'none',
+      color: 'var(--text-primary)',
+      padding: '8px',
+      borderRadius: '6px',
+      cursor: 'pointer',
+      fontSize: '0.88rem',
+      transition: 'background var(--dur-fast) var(--ease-out)'
+    };
+    const hoverOn = (e) => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; };
+    const hoverOff = (e) => { e.currentTarget.style.background = 'none'; };
+
+    return (
+      <div style={{ position: 'relative' }}>
+        <button
+          type="button"
+          className={`btn-icon row-reveal${menuOpenId === track.id ? ' row-reveal--pinned' : ''}`}
+          title="Plus d'options"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuOpenId(menuOpenId === track.id ? null : track.id);
+          }}
+        >
+          <MoreVertical size={20} />
+        </button>
+
+        {menuOpenId === track.id && (
+          <div
+            ref={menuRef}
+            className="glass toast-in"
+            style={{
+              position: 'absolute', right: 0, top: '100%', marginTop: '8px', zIndex: 50,
+              background: 'rgba(24, 24, 30, 0.97)', border: '1px solid rgba(255,255,255,0.1)',
+              borderRadius: 'var(--radius-md)', padding: '8px', minWidth: '210px',
+              boxShadow: '0 16px 40px rgba(0,0,0,0.55)'
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {typeof onQueueNext === 'function' && (
+              <button
+                type="button"
+                style={itemStyle}
+                onMouseOver={hoverOn}
+                onMouseOut={hoverOff}
+                onClick={() => { onQueueNext(track); setMenuOpenId(null); }}
+              >
+                <CornerDownRight size={16} /> Lire ensuite
+              </button>
+            )}
+            {typeof onQueueLast === 'function' && (
+              <button
+                type="button"
+                style={itemStyle}
+                onMouseOver={hoverOn}
+                onMouseOut={hoverOff}
+                onClick={() => { onQueueLast(track); setMenuOpenId(null); }}
+              >
+                <ListPlus size={16} /> Ajouter à la file
+              </button>
+            )}
+            {canOpenArtist && (
+              <button
+                type="button"
+                style={itemStyle}
+                onMouseOver={hoverOn}
+                onMouseOut={hoverOff}
+                onClick={() => { onOpenArtist(track); setMenuOpenId(null); }}
+              >
+                <User size={16} /> Voir l&apos;artiste
+              </button>
+            )}
+            {canRemove && (
+              <button
+                type="button"
+                style={{ ...itemStyle, color: 'var(--danger-color)' }}
+                onMouseOver={hoverOn}
+                onMouseOut={hoverOff}
+                onClick={() => { onRemoveTrack(track); setMenuOpenId(null); }}
+              >
+                <Trash2 size={16} /> {removeTrackLabel}
+              </button>
+            )}
+            {playlists.length > 0 && (
+              <>
+                <div
+                  style={{
+                    fontSize: '0.74rem', color: 'var(--text-secondary)', padding: '8px 8px 4px',
+                    marginTop: '4px', borderTop: '1px solid rgba(255,255,255,0.1)'
+                  }}
+                >
+                  Ajouter à une playlist
+                </div>
+                {playlists.map(pl => (
+                  <button
+                    key={pl.id}
+                    type="button"
+                    style={itemStyle}
+                    onMouseOver={hoverOn}
+                    onMouseOut={hoverOff}
+                    onClick={() => { onAddToPlaylist(pl.id, track); setMenuOpenId(null); }}
+                  >
+                    {pl.name}
+                  </button>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', paddingBottom: '100px' }}>
@@ -96,7 +229,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
         const isCurrentTrack = currentTrack?.id === track.id;
         const isFav = (favorites || []).find(f => f.id === track.id);
         const isUnavailable = track.unavailable;
-        const isDownloading = downloadingIds.has(track.id);
+        const { active: isDownloading, percent, failed } = downloadState(track);
         const isFixed = track.isFixed;
         const isLocalFile = !!track.isLocalFile;
         const canOpenArtist = typeof onOpenArtist === 'function' && !!resolveArtistPermalinkUrl(track);
@@ -105,24 +238,26 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
           return (
             <div
               key={track.id}
-              className="glass animate-fade-in"
+              className="glass track-row animate-fade-in"
+              onClick={() => !isDownloading && onPlay(track, index)}
+              title="Cliquer pour récupérer automatiquement une copie lisible"
               style={{
                 display: 'flex',
                 flexDirection: 'column',
                 padding: '12px 20px',
-                cursor: 'default',
+                cursor: isDownloading ? 'progress' : 'pointer',
                 backgroundColor: 'rgba(120, 120, 130, 0.06)',
                 borderColor: 'rgba(255, 255, 255, 0.06)',
-                opacity: isDownloading ? 0.88 : 0.72,
+                opacity: isDownloading ? 0.95 : 0.78,
                 animationDelay: `${index * 0.05}s`
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div style={{ width: '40px', display: 'flex', justifyContent: 'center', color: '#71717a' }}>
+                <div style={{ width: '40px', display: 'flex', justifyContent: 'center', color: 'var(--text-muted)' }}>
                   {isDownloading ? (
                     <Loader2 size={20} className="animate-spin" style={{ color: 'var(--accent-color)' }} />
                   ) : (
-                    <AlertCircle size={20} style={{ color: '#71717a' }} />
+                    <AlertCircle size={20} style={{ color: failed ? 'var(--danger-color)' : 'var(--text-muted)' }} />
                   )}
                 </div>
                 {track.artwork ? (
@@ -134,8 +269,9 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                       height: '48px',
                       borderRadius: '4px',
                       objectFit: 'cover',
-                      filter: 'grayscale(1) brightness(0.75)',
-                      opacity: 0.85
+                      filter: isDownloading ? 'none' : 'grayscale(1) brightness(0.75)',
+                      opacity: 0.9,
+                      transition: 'filter var(--dur-slow) var(--ease-out)'
                     }}
                   />
                 ) : (
@@ -150,11 +286,11 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                   />
                 )}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: 500, color: '#a1a1aa' }}>
+                  <h4 className="truncate" style={{ margin: 0, fontSize: '1rem', fontWeight: 500, color: 'var(--text-secondary)' }}>
                     {track.title}
                   </h4>
-                  <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: '#71717a' }}>
-                    {onOpenArtist && canOpenArtist ? (
+                  <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    {canOpenArtist ? (
                       <button
                         type="button"
                         onClick={(e) => {
@@ -176,8 +312,12 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                       track.artist
                     )}
                   </p>
-                  <span style={{ fontSize: '0.72rem', color: '#52525b', marginTop: '4px', display: 'inline-block' }}>
-                    Non disponible sur SoundCloud — récupère une copie locale
+                  <span style={{ fontSize: '0.72rem', color: failed ? 'var(--danger-color)' : '#52525b', marginTop: '4px', display: 'inline-block' }}>
+                    {isDownloading
+                      ? `Récupération automatique${percent != null ? ` · ${percent}%` : '…'}`
+                      : failed
+                        ? 'La récupération a échoué — clique pour réessayer'
+                        : 'Indisponible en streaming — clique pour récupérer le son'}
                   </span>
                 </div>
                 <div style={{ flexShrink: 0, textAlign: 'right', minWidth: '76px' }}>
@@ -185,41 +325,36 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                     {formatDuration(track.duration)}
                   </div>
                   {streamLabel(track.playbackCount) != null ? (
-                    <div style={{ fontSize: '0.72rem', color: '#71717a', marginTop: '3px' }} title="Lectures SoundCloud">
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '3px' }} title="Lectures SoundCloud">
                       {streamLabel(track.playbackCount)}
                     </div>
                   ) : null}
                 </div>
+                {renderMenu(track)}
               </div>
 
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  paddingTop: '14px',
-                  paddingBottom: '4px'
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={(e) => handleDownload(e, track)}
-                  disabled={isDownloading}
-                  title="Télécharger via une source alternative"
-                  style={downloadBtnStyle(true, isDownloading, true)}
+              {isDownloading && (
+                <div
+                  style={{
+                    marginTop: '12px',
+                    height: '4px',
+                    borderRadius: 'var(--radius-pill)',
+                    background: 'rgba(255,255,255,0.08)',
+                    overflow: 'hidden'
+                  }}
                 >
-                  {isDownloading ? (
-                    <>
-                      <Loader2 size={16} className="animate-spin" />
-                      Téléchargement…
-                    </>
-                  ) : (
-                    <>
-                      <Download size={16} />
-                      Récupérer le son
-                    </>
-                  )}
-                </button>
-              </div>
+                  <div
+                    className={percent == null ? 'pulse-soft' : undefined}
+                    style={{
+                      height: '100%',
+                      width: percent != null ? `${percent}%` : '40%',
+                      background: 'var(--accent-color)',
+                      borderRadius: 'inherit',
+                      transition: 'width var(--dur-med) var(--ease-out)'
+                    }}
+                  />
+                </div>
+              )}
             </div>
           );
         }
@@ -228,25 +363,18 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
           <div
             key={track.id}
             onClick={() => onPlay(track, index)}
-            className="glass animate-fade-in"
+            className="glass track-row animate-fade-in"
             style={{
               display: 'flex',
               alignItems: 'center',
               padding: '12px 20px',
               cursor: 'pointer',
-              transition: 'all 0.2s ease',
               backgroundColor: isCurrentTrack ? 'var(--surface-hover)' : 'var(--surface-color)',
               borderColor: isCurrentTrack ? 'var(--accent-color)' : 'var(--border-color)',
               animationDelay: `${index * 0.05}s`,
               overflow: 'visible',
               position: 'relative',
               zIndex: menuOpenId === track.id ? 50 : 1
-            }}
-            onMouseEnter={(e) => {
-              if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-hover)';
-            }}
-            onMouseLeave={(e) => {
-              if (!isCurrentTrack) e.currentTarget.style.backgroundColor = 'var(--surface-color)';
             }}
           >
             <div
@@ -291,7 +419,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 {isFixed && !isLocalFile && <Check size={14} color="var(--accent-color)" />}
               </div>
               <p className="truncate" style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-                {onOpenArtist && canOpenArtist ? (
+                {canOpenArtist ? (
                   <button
                     type="button"
                     onClick={(e) => {
@@ -318,19 +446,20 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
               </p>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               {!isFixed && !isLocalFile && (
                 <button
                   type="button"
+                  className="btn-pill row-reveal"
                   onClick={(e) => handleDownload(e, track)}
                   disabled={isDownloading}
-                  title="Télécharger localement"
-                  style={downloadBtnStyle(false, isDownloading, false)}
+                  title="Garder une copie locale"
+                  style={{ padding: '7px 14px', fontSize: '0.78rem' }}
                 >
                   {isDownloading ? (
                     <>
                       <Loader2 size={14} className="animate-spin" />
-                      …
+                      {percent != null ? `${percent}%` : '…'}
                     </>
                   ) : (
                     <>
@@ -342,18 +471,9 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
 
               <button
                 type="button"
+                className={`btn-icon${isFav ? ' is-active' : ''}`}
                 onClick={(e) => toggleFavorite(track, e)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  color: isFav ? 'var(--accent-color)' : 'var(--text-secondary)',
-                  transition: 'transform 0.1s',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '4px'
-                }}
+                title={isFav ? 'Retirer des favoris' : 'Ajouter aux favoris'}
               >
                 <Heart size={20} fill={isFav ? 'currentColor' : 'none'} />
               </button>
@@ -369,56 +489,7 @@ export default function TrackList({ tracks, onPlay, currentTrack, isAudioPlaying
                 ) : null}
               </div>
 
-              {playlists.length > 0 && (
-                <div style={{ position: 'relative' }}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setMenuOpenId(menuOpenId === track.id ? null : track.id);
-                    }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', padding: '4px' }}
-                  >
-                    <MoreVertical size={20} />
-                  </button>
-                  
-                  {menuOpenId === track.id && (
-                    <div 
-                      ref={menuRef}
-                      className="glass animate-fade-in"
-                      style={{
-                        position: 'absolute', right: '0', top: '100%', marginTop: '8px', zIndex: 50,
-                        background: 'rgba(30, 30, 36, 0.95)', border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: '12px', padding: '8px', minWidth: '180px', boxShadow: '0 10px 30px rgba(0,0,0,0.5)'
-                      }}
-                    >
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', padding: '4px 8px', marginBottom: '4px', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                        Ajouter à...
-                      </div>
-                      {playlists.map(pl => (
-                        <button
-                          key={pl.id}
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAddToPlaylist(pl.id, track);
-                            setMenuOpenId(null);
-                          }}
-                          style={{
-                            display: 'block', width: '100%', textAlign: 'left', background: 'none', border: 'none',
-                            color: 'var(--text-primary)', padding: '8px', borderRadius: '6px', cursor: 'pointer',
-                            fontSize: '0.9rem', transition: 'background 0.2s'
-                          }}
-                          onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.1)'}
-                          onMouseOut={e => e.currentTarget.style.background = 'none'}
-                        >
-                          {pl.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
+              {renderMenu(track)}
             </div>
           </div>
         );

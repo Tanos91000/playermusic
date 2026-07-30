@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { Search, Heart, Home, X, Undo2, Download as DownloadIcon, Settings as SettingsIcon, FolderOpen, Users, ListMusic } from 'lucide-react';
 import Player from './components/Player';
 import TrackList from './components/TrackList';
@@ -10,8 +10,13 @@ import ArtistProfileView from './components/ArtistProfileView';
 import LocalFilesView from './components/LocalFilesView';
 import JamView from './components/JamView';
 import PlaylistsView from './components/PlaylistsView';
+import QueueView from './components/QueueView';
+import DownloadToasts from './components/DownloadToasts';
+import TrackListSkeleton from './components/TrackListSkeleton';
 import { TrackArtPlaceholder, RemoteAvatar } from './components/MediaPlaceholder';
 import { resolveArtistPermalinkUrl } from './utils/soundcloudArtist';
+import useDownloadManager from './hooks/useDownloadManager';
+import { buildShuffleOrder, nextIndexFor, prevIndexFor, upcomingIndices } from './utils/playbackOrder';
 
 const emptyDownloadsLibrary = {
   downloadsDir: '',
@@ -21,6 +26,16 @@ const emptyDownloadsLibrary = {
 };
 
 const LOCAL_PATHS_STORAGE_KEY = 'aura_local_library_paths';
+
+const NAV_TABS = [
+  { key: 'home', label: 'Accueil', Icon: Home },
+  { key: 'favorites', label: 'Favoris', Icon: Heart },
+  { key: 'downloads', label: 'Téléchargés', Icon: DownloadIcon },
+  { key: 'local', label: 'Fichiers locaux', Icon: FolderOpen },
+  { key: 'playlists', label: 'Playlists', Icon: ListMusic },
+  { key: 'jam', label: 'Jam', Icon: Users },
+  { key: 'settings', label: 'Paramètres', Icon: SettingsIcon }
+];
 
 function localPathToTrack(absPath) {
   const norm = typeof absPath === 'string' ? absPath.trim() : '';
@@ -129,14 +144,33 @@ export default function App() {
     }
   }, []);
 
+  /** Position de lecture : ref à chaque frame, state limité à ~2 Hz pour la Jam. */
+  const handlePositionUpdate = useCallback((pos) => {
+    playbackPositionRef.current = pos;
+    setPlaybackPosition((prev) => (Math.abs(pos - prev) >= 0.5 ? pos : prev));
+  }, []);
+
   const [currentTrack, setCurrentTrack] = useState(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [playlistContext, setPlaylistContext] = useState([]);
+  const [contextLabel, setContextLabel] = useState('');
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [playbackManualEpoch, setPlaybackManualEpoch] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const discordTrackStartRef = useRef({ trackId: null, startedAt: 0 });
-  
+
+  /* --- File d'attente / modes de lecture ------------------------------- */
+  const [queue, setQueue] = useState([]);
+  const [showQueue, setShowQueue] = useState(false);
+  const [playingFromQueue, setPlayingFromQueue] = useState(false);
+  const [shuffle, setShuffle] = useState(() => localStorage.getItem('aura_shuffle') === 'true');
+  const [repeatMode, setRepeatMode] = useState(() => localStorage.getItem('aura_repeat') || 'off');
+  const [shuffleOrder, setShuffleOrder] = useState([]);
+  /** Position à restaurer après une réparation automatique de la piste courante. */
+  const [resumeAt, setResumeAt] = useState(0);
+  const playbackPositionRef = useRef(0);
+  const playerControlsRef = useRef(null);
+
   const [isMiniPlayer, setIsMiniPlayer] = useState(false);
   const [showLargeCover, setShowLargeCover] = useState(false);
   const [favoritesSearch, setFavoritesSearch] = useState('');
@@ -237,6 +271,50 @@ export default function App() {
       startedAt: isAudioPlaying ? startedAt : undefined
     });
   }, [currentTrack, isAudioPlaying]);
+
+  /* Touches média système + raccourcis clavier globaux. Les handlers sont lus
+     via une ref pour ne pas réenregistrer les listeners à chaque rendu. */
+  const shortcutHandlersRef = useRef({});
+  shortcutHandlersRef.current = {
+    'play-pause': () => playerControlsRef.current?.togglePlay?.(),
+    stop: () => playerControlsRef.current?.pause?.(),
+    next: () => playNextManual(),
+    previous: () => playPrev(),
+    'seek-forward': () => playerControlsRef.current?.nudge?.(10),
+    'seek-backward': () => playerControlsRef.current?.nudge?.(-10),
+    shuffle: () => toggleShuffle(),
+    repeat: () => cycleRepeat()
+  };
+
+  useEffect(() => {
+    window.electronAPI?.onMediaKey?.((action) => {
+      shortcutHandlersRef.current[action]?.();
+    });
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const map = {
+        ArrowRight: 'seek-forward',
+        ArrowLeft: 'seek-backward',
+        KeyN: 'next',
+        KeyP: 'previous',
+        KeyS: 'shuffle',
+        KeyR: 'repeat'
+      };
+      const action = map[e.code];
+      if (!action) return;
+      e.preventDefault();
+      shortcutHandlersRef.current[action]?.();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleEqChange = (bands) => {
     setEqBands(bands);
@@ -432,13 +510,8 @@ export default function App() {
     }
   };
 
-  const playTrack = (track, index, contextList) => {
-    setPlaybackManualEpoch((n) => n + 1);
-    setCurrentTrack(track);
-    setPlaylistContext(contextList);
-    setCurrentIndex(index);
-    if (!isMiniPlayer) setShowLargeCover(true);
-
+  const pushRecent = (track) => {
+    if (!track) return;
     setRecentTracks(prev => {
       const next = [{ ...track }, ...prev.filter(t => t.id !== track.id)].slice(0, 20);
       try {
@@ -448,6 +521,55 @@ export default function App() {
       }
       return next;
     });
+  };
+
+  /** Une piste bloquée sur SoundCloud n'est jouable qu'une fois récupérée localement. */
+  const needsRepair = (track) =>
+    !!track && !track.localPath && !track.isLocalFile && !!track.unavailable && track.id != null;
+
+  const startPlayback = (track, index, contextList, label) => {
+    const list = Array.isArray(contextList) && contextList.length > 0 ? contextList : [track];
+    const safeIndex = index >= 0 && index < list.length ? index : 0;
+
+    setPlaybackManualEpoch((n) => n + 1);
+    setResumeAt(0);
+    setPlayingFromQueue(false);
+    setCurrentTrack(track);
+    setPlaylistContext(list);
+    setCurrentIndex(safeIndex);
+    setShuffleOrder(shuffle ? buildShuffleOrder(list.length, safeIndex) : []);
+    if (typeof label === 'string') setContextLabel(label);
+    if (!isMiniPlayer) setShowLargeCover(true);
+    pushRecent(track);
+  };
+
+  /**
+   * Lecture d'une piste. Si elle est indisponible en streaming, on lance la
+   * récupération locale automatiquement puis on enchaîne la lecture.
+   */
+  const playTrack = async (track, index, contextList, label) => {
+    if (!track) return;
+
+    if (!needsRepair(track)) {
+      startPlayback(track, index, contextList, label);
+      return;
+    }
+
+    const localPath = await downloads.start(track);
+    if (!localPath) {
+      setStreamUnavailableNotice({
+        title: track.title?.trim() || 'Ce titre',
+        artist: track.artist?.trim() || '',
+        repairFailed: true
+      });
+      return;
+    }
+
+    const repaired = markTrackDownloaded(track, localPath);
+    const list = (Array.isArray(contextList) ? contextList : [track]).map((t) =>
+      t.id === track.id ? repaired : t
+    );
+    startPlayback(repaired, index, list, label);
   };
 
   const markTrackDownloaded = (track, localPath) => ({
@@ -482,8 +604,18 @@ export default function App() {
     if (currentTrack?.id === track.id) {
       setCurrentTrack(prev => prev ? markTrackDownloaded(prev, result.localPath) : prev);
     }
+    setQueue(prev => prev.map(updateTrack));
     loadDownloadedLibrary();
   };
+
+  const handleTrackDownloadedRef = useRef(handleTrackDownloaded);
+  handleTrackDownloadedRef.current = handleTrackDownloaded;
+
+  const downloads = useDownloadManager({
+    onDownloaded: useCallback((track, result) => {
+      handleTrackDownloadedRef.current(track, result);
+    }, [])
+  });
 
   const handleDeleteDownloadedTrack = async (track) => {
     const confirmed = window.confirm(`Supprimer "${track.title}" des téléchargements ?`);
@@ -516,13 +648,62 @@ export default function App() {
     }
   };
 
+  /* --- File d'attente --------------------------------------------------- */
+
+  const enqueue = (track, { next = false } = {}) => {
+    if (!track) return;
+    setQueue(prev => (next ? [track, ...prev] : [...prev, track]));
+  };
+
+  const removeFromQueue = (index) => {
+    setQueue(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const playQueuedAt = (index) => {
+    const track = queue[index];
+    if (!track) return;
+    setQueue(prev => prev.filter((_, i) => i !== index));
+    setPlaybackManualEpoch((n) => n + 1);
+    setResumeAt(0);
+    setPlayingFromQueue(true);
+    setCurrentTrack(track);
+    pushRecent(track);
+  };
+
+  const toggleShuffle = () => {
+    const next = !shuffle;
+    localStorage.setItem('aura_shuffle', String(next));
+    setShuffle(next);
+    setShuffleOrder(next ? buildShuffleOrder(playlistContext.length, currentIndex) : []);
+  };
+
+  const cycleRepeat = () => {
+    const next = repeatMode === 'off' ? 'all' : repeatMode === 'all' ? 'one' : 'off';
+    localStorage.setItem('aura_repeat', next);
+    setRepeatMode(next);
+  };
+
   /** Passage auto en fin de morceau — ne doit pas lever le blocage après erreur réseau. */
   const playNextAuto = () => {
-    if (currentIndex < playlistContext.length - 1) {
-      const nextIndex = currentIndex + 1;
-      setCurrentTrack(playlistContext[nextIndex]);
-      setCurrentIndex(nextIndex);
+    if (queue.length > 0) {
+      playQueuedAt(0);
+      return;
     }
+
+    const nextIndex = nextIndexFor({
+      length: playlistContext.length,
+      currentIndex,
+      shuffle,
+      shuffleOrder,
+      repeatMode
+    });
+    if (nextIndex < 0) return;
+
+    setResumeAt(0);
+    setPlayingFromQueue(false);
+    setCurrentTrack(playlistContext[nextIndex]);
+    setCurrentIndex(nextIndex);
+    pushRecent(playlistContext[nextIndex]);
   };
 
   /** Bouton suivant / intention utilisateur — débloque la lecture après une erreur. */
@@ -532,21 +713,67 @@ export default function App() {
   };
 
   const playPrev = () => {
-    if (currentIndex > 0) {
-      setPlaybackManualEpoch((n) => n + 1);
-      const prevIndex = currentIndex - 1;
-      setCurrentTrack(playlistContext[prevIndex]);
-      setCurrentIndex(prevIndex);
+    // Comportement type Spotify : au-delà de 3 s, « précédent » relance la piste.
+    if (playbackPositionRef.current > 3 && playerControlsRef.current?.seek) {
+      playerControlsRef.current.seek(0);
+      return;
     }
+
+    setPlaybackManualEpoch((n) => n + 1);
+
+    // On sortait d'une piste de la file : on revient au contexte laissé en plan.
+    if (playingFromQueue && playlistContext[currentIndex]) {
+      setResumeAt(0);
+      setPlayingFromQueue(false);
+      setCurrentTrack(playlistContext[currentIndex]);
+      return;
+    }
+
+    const prevIndex = prevIndexFor({
+      length: playlistContext.length,
+      currentIndex,
+      shuffle,
+      shuffleOrder,
+      repeatMode
+    });
+    if (prevIndex < 0) return;
+
+    setResumeAt(0);
+    setCurrentTrack(playlistContext[prevIndex]);
+    setCurrentIndex(prevIndex);
   };
 
-  const handleStreamError = () => {
+  /**
+   * Le stream SoundCloud a échoué : on tente une récupération locale automatique
+   * et on reprend la lecture là où elle s'était arrêtée. Le message d'erreur
+   * n'apparaît qu'en cas d'échec de cette réparation.
+   */
+  const handleStreamError = async () => {
+    const track = currentTrack;
+    if (!track) return;
+
+    const canRepair = !track.isLocalFile && !track.localPath && track.id != null;
+    if (canRepair) {
+      const resumeTarget = playbackPositionRef.current;
+      setResumeAt(resumeTarget > 2 ? resumeTarget : 0);
+
+      const localPath = await downloads.start(track);
+      if (localPath) {
+        setPlaybackManualEpoch((n) => n + 1);
+        setCurrentTrack(prev => (prev?.id === track.id ? markTrackDownloaded(prev, localPath) : prev));
+        return;
+      }
+      setResumeAt(0);
+    }
+
     console.error('Stream failed');
     const el = mainScrollRef.current;
     if (el) streamNoticeScrollRestoreRef.current = el.scrollTop;
-    const title = currentTrack?.title?.trim() || 'Ce titre';
-    const artist = currentTrack?.artist?.trim() || '';
-    setStreamUnavailableNotice({ title, artist });
+    setStreamUnavailableNotice({
+      title: track.title?.trim() || 'Ce titre',
+      artist: track.artist?.trim() || '',
+      repairFailed: canRepair
+    });
   };
 
   useLayoutEffect(() => {
@@ -581,6 +808,35 @@ export default function App() {
         return titleMatch || artistMatch;
       })
       : [];
+
+  /** Props partagées par toutes les listes de pistes. */
+  const trackListCommonProps = {
+    currentTrack,
+    isAudioPlaying,
+    favorites,
+    toggleFavorite,
+    onTrackDownloaded: handleTrackDownloaded,
+    downloadStates: downloads.downloads,
+    onDownload: downloads.start,
+    playlists,
+    onAddToPlaylist: addToPlaylist,
+    onQueueNext: (track) => enqueue(track, { next: true }),
+    onQueueLast: (track) => enqueue(track)
+  };
+
+  /** Pistes restant à jouer dans le contexte courant (panneau file d'attente). */
+  const upNext = useMemo(
+    () =>
+      upcomingIndices({
+        length: playlistContext.length,
+        currentIndex,
+        shuffle,
+        shuffleOrder
+      })
+        .map((index) => ({ track: playlistContext[index], index }))
+        .filter((entry) => !!entry.track),
+    [playlistContext, currentIndex, shuffle, shuffleOrder]
+  );
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100vh', maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
@@ -679,7 +935,7 @@ export default function App() {
             </button>
           </div>
           <h3 id="stream-unavail-title" style={{ margin: '0 0 10px', fontSize: '1.05rem', fontWeight: 700 }}>
-            Streaming indisponible
+            Lecture impossible
           </h3>
           <p style={{ margin: '0 0 8px', fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
             « {streamUnavailableNotice.title} »
@@ -687,32 +943,35 @@ export default function App() {
             SoundCloud.
           </p>
           <p style={{ margin: '0 0 18px', fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
-            Télécharge la piste pour l&apos;écouter localement (bouton Download sur la piste).
+            {streamUnavailableNotice.repairFailed
+              ? 'La récupération automatique d’une copie locale a échoué. Réessaie dans un instant, ou passe à la piste suivante.'
+              : 'Télécharge la piste pour l’écouter localement (bouton Download sur la piste).'}
           </p>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             {currentIndex > 0 && (
               <button
                 type="button"
+                className="btn-pill"
                 onClick={() => {
                   setStreamUnavailableNotice(null);
                   playPrev();
                 }}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  background: 'rgba(255,255,255,0.1)',
-                  border: 'none',
-                  color: 'var(--text-primary)',
-                  padding: '10px 16px',
-                  borderRadius: '22px',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '0.88rem'
-                }}
               >
                 <Undo2 size={18} />
                 Demi-tour
+              </button>
+            )}
+            {streamUnavailableNotice.repairFailed && currentTrack && (
+              <button
+                type="button"
+                className="btn-pill btn-pill--accent"
+                onClick={() => {
+                  setStreamUnavailableNotice(null);
+                  downloads.retry(currentTrack);
+                }}
+              >
+                <DownloadIcon size={18} />
+                Réessayer
               </button>
             )}
           </div>
@@ -751,13 +1010,19 @@ export default function App() {
             <div style={{ flex: '1 1 240px', minWidth: 0 }}>
               <h1 className="text-gradient" style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', fontWeight: 700, margin: 0, letterSpacing: '-0.02em' }}>Aura Player</h1>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '15px', WebkitAppRegion: 'no-drag' }}>
-                <button className="glass" onClick={() => setActiveTab('home')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'home' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'home' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Home size={16} /> Accueil</button>
-                <button className="glass" onClick={() => setActiveTab('favorites')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'favorites' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'favorites' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Heart size={16} /> Favoris</button>
-                <button className="glass" onClick={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'downloads' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'downloads' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><DownloadIcon size={16} /> Téléchargés</button>
-                <button className="glass" onClick={() => setActiveTab('local')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'local' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'local' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><FolderOpen size={16} /> Fichiers locaux</button>
-                <button className="glass" onClick={() => setActiveTab('playlists')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'playlists' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'playlists' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><ListMusic size={16} /> Playlists</button>
-                <button className="glass" onClick={() => setActiveTab('jam')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'jam' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'jam' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><Users size={16} /> Jam</button>
-                <button className="glass" onClick={() => setActiveTab('settings')} style={{ padding: '8px 16px', borderRadius: '20px', border: 'none', fontSize: '1.1rem', color: activeTab === 'settings' ? 'var(--accent-color)' : 'var(--text-secondary)', fontWeight: activeTab === 'settings' ? 600 : 400, cursor: 'pointer', transition: 'all 0.2s', display: 'flex', alignItems: 'center', gap: '6px' }}><SettingsIcon size={16} /> Paramètres</button>
+                {NAV_TABS.map(({ key, label, Icon }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`glass nav-pill${activeTab === key ? ' is-active' : ''}`}
+                    onClick={() => {
+                      setActiveTab(key);
+                      if (key === 'downloads') loadDownloadedLibrary();
+                    }}
+                  >
+                    <Icon size={16} /> {label}
+                  </button>
+                ))}
               </div>
             </div>
             
@@ -832,18 +1097,22 @@ export default function App() {
                 downloadTracks={downloadsLibrary.tracks}
                 currentTrack={currentTrack}
                 isAudioPlaying={isAudioPlaying}
-                onPlay={(track, index, list) => playTrack(track, index, list)}
+                onPlay={(track, index, list) => playTrack(track, index, list, 'Accueil')}
                 onNavigateSearch={() => setActiveTab('search')}
                 onNavigateFavorites={() => setActiveTab('favorites')}
                 onNavigateDownloads={() => { setActiveTab('downloads'); loadDownloadedLibrary(); }}
                 onNavigateLocal={() => setActiveTab('local')}
               />
             ) : activeTab === 'search' && isLoading ? (
-              <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
-                <p>Recherche en cours...</p>
+              <div className="view-enter">
+                <h3 style={{ fontSize: '1.1rem', fontWeight: 600, marginBottom: '14px', color: 'var(--text-secondary)' }}>
+                  Recherche en cours…
+                </h3>
+                <TrackListSkeleton rows={7} />
               </div>
             ) : activeTab === 'search' && searchSubView === 'artist' ? (
               <ArtistProfileView
+                {...trackListCommonProps}
                 profile={artistProfile}
                 tracks={artistProfileTracks}
                 loading={artistProfileLoading}
@@ -852,13 +1121,10 @@ export default function App() {
                   setArtistProfile(null);
                   setArtistProfileTracks([]);
                 }}
-                onPlay={(track, index, list) => playTrack(track, index, list)}
+                onPlay={(track, index, list) =>
+                  playTrack(track, index, list, artistProfile?.username ? `Artiste · ${artistProfile.username}` : 'Artiste')
+                }
                 onOpenArtistFromTrack={openArtistFromTrack}
-                currentTrack={currentTrack}
-                isAudioPlaying={isAudioPlaying}
-                favorites={favorites}
-                toggleFavorite={toggleFavorite}
-                onTrackDownloaded={handleTrackDownloaded}
               />
             ) : activeTab === 'search' ? (
               <>
@@ -928,72 +1194,65 @@ export default function App() {
                       Pistes
                     </h3>
                     <TrackList
+                      {...trackListCommonProps}
                       tracks={tracks}
-                      onPlay={(track, index) => playTrack(track, index, tracks)}
-                      currentTrack={currentTrack}
-                      isAudioPlaying={isAudioPlaying}
-                      favorites={favorites}
-                      toggleFavorite={toggleFavorite}
-                      onTrackDownloaded={handleTrackDownloaded}
+                      onPlay={(track, index) => playTrack(track, index, tracks, `Recherche · ${searchQuery}`)}
                       onOpenArtist={openArtistFromTrack}
-                      playlists={playlists}
-                      onAddToPlaylist={addToPlaylist}
                     />
                   </>
                 )}
               </>
             ) : activeTab === 'local' ? (
               <LocalFilesView
+                {...trackListCommonProps}
                 tracks={localLibraryTracks}
-                currentTrack={currentTrack}
-                isAudioPlaying={isAudioPlaying}
-                onPlay={(track, index) => playTrack(track, index, localLibraryTracks)}
+                onPlay={(track, index) => playTrack(track, index, localLibraryTracks, 'Fichiers locaux')}
                 onImport={handleImportLocalFiles}
-                favorites={favorites}
-                toggleFavorite={toggleFavorite}
                 onOpenArtist={openArtistFromTrack}
               />
             ) : activeTab === 'playlists' ? (
               <PlaylistsView
+                {...trackListCommonProps}
                 playlists={playlists}
                 onCreatePlaylist={handleCreatePlaylist}
                 onDeletePlaylist={handleDeletePlaylist}
-                onPlayPlaylist={(pl) => playTrack(pl.tracks[0], 0, pl.tracks)}
-                currentTrack={currentTrack}
-                isAudioPlaying={isAudioPlaying}
+                onPlayPlaylist={(pl) => playTrack(pl.tracks[0], 0, pl.tracks, `Playlist · ${pl.name}`)}
                 onPlayTrack={playTrack}
-                favorites={favorites}
-                toggleFavorite={toggleFavorite}
-                onTrackDownloaded={handleTrackDownloaded}
                 onRemoveFromPlaylist={removeFromPlaylist}
               />
             ) : activeTab === 'downloads' ? (
               downloadsLoading ? (
-                <div className="flex-center" style={{ height: '50vh', color: 'var(--text-secondary)' }}>
-                  <p>Chargement...</p>
-                </div>
+                <TrackListSkeleton rows={5} />
               ) : (
                 <DownloadsView
                   library={downloadsLibrary}
                   currentTrack={currentTrack}
                   isAudioPlaying={isAudioPlaying}
-                  onPlay={(track, index) => playTrack(track, index, downloadsLibrary.tracks)}
+                  onPlay={(track, index) => playTrack(track, index, downloadsLibrary.tracks, 'Téléchargés')}
                   onDelete={handleDeleteDownloadedTrack}
                 />
               )
-            ) : (
-              <TrackList 
-                tracks={currentList} 
-                onPlay={(track, index) => playTrack(track, index, currentList)} 
+            ) : activeTab === 'favorites' ? (
+              <TrackList
+                {...trackListCommonProps}
+                tracks={currentList}
+                onPlay={(track, index) => playTrack(track, index, currentList, 'Favoris')}
+                onOpenArtist={openArtistFromTrack}
+              />
+            ) : null}
+
+            {/* JamView reste monté : démonter couperait la connexion MQTT. */}
+            <div style={{ display: activeTab === 'jam' ? 'block' : 'none' }}>
+              <JamView
                 currentTrack={currentTrack}
                 isAudioPlaying={isAudioPlaying}
-                favorites={favorites}
-                toggleFavorite={toggleFavorite}
-                onTrackDownloaded={handleTrackDownloaded}
-                playlists={playlists}
-                onAddToPlaylist={addToPlaylist}
+                onPlayTrack={playTrack}
+                onJamSync={handleJamSync}
+                playbackPosition={playbackPosition}
+                username={jamUsername}
+                onSetUsername={handleSetJamUsername}
               />
-            )}
+            </div>
           </main>
         </div>
       )}
@@ -1030,13 +1289,34 @@ export default function App() {
         </div>
       )}
 
+      <QueueView
+        open={showQueue}
+        onClose={() => setShowQueue(false)}
+        currentTrack={currentTrack}
+        isAudioPlaying={isAudioPlaying}
+        queue={queue}
+        upNext={upNext}
+        contextLabel={contextLabel ? `Ensuite · ${contextLabel}` : 'Ensuite'}
+        onPlayQueued={playQueuedAt}
+        onRemoveQueued={removeFromQueue}
+        onClearQueue={() => setQueue([])}
+        onPlayUpNext={(index) => playTrack(playlistContext[index], index, playlistContext, contextLabel)}
+      />
+
+      <DownloadToasts
+        downloads={downloads.downloads}
+        onRetry={(entry) => downloads.retry(entry)}
+        onDismiss={downloads.dismiss}
+        bottomOffset={currentTrack && !isMiniPlayer ? 118 : 24}
+      />
+
       {/* Always rendered Player to prevent unmounting! */}
-      <Player 
-        currentTrack={currentTrack} 
-        onNext={playNextAuto} 
+      <Player
+        currentTrack={currentTrack}
+        onNext={playNextAuto}
         onManualNext={playNextManual}
         playbackManualEpoch={playbackManualEpoch}
-        onPrev={playPrev} 
+        onPrev={playPrev}
         onError={handleStreamError}
         isMini={isMiniPlayer}
         toggleMiniPlayer={toggleMiniPlayer}
@@ -1049,9 +1329,16 @@ export default function App() {
         djMode={djMode}
         onPlaybackChange={setIsAudioPlaying}
         onOpenArtist={openArtistFromTrack}
-        onPositionUpdate={(pos, dur) => {
-          setPlaybackPosition(pos);
-        }}
+        onPositionUpdate={handlePositionUpdate}
+        controlsRef={playerControlsRef}
+        resumeAt={resumeAt}
+        shuffle={shuffle}
+        onToggleShuffle={toggleShuffle}
+        repeatMode={repeatMode}
+        onCycleRepeat={cycleRepeat}
+        queueCount={queue.length}
+        onToggleQueue={() => setShowQueue((v) => !v)}
+        isRepairing={currentTrack ? downloads.isDownloading(currentTrack.id) : false}
       />
     </div>
   );

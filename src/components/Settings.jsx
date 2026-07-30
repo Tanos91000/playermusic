@@ -161,9 +161,11 @@ export default function Settings({
             <span>Acoustique Studio (Sec)</span>
             <span>Hall de Concert (Vaste)</span>
           </div>
-          <input 
+          <input
+            className="range range--slim"
+            aria-label="Intensité de la réverbération"
             type="range" min="0" max="1" step="0.01" value={reverb} onChange={(e) => setReverb(parseFloat(e.target.value))}
-            style={{ width: '100%', height: '4px', appearance: 'none', background: 'var(--bg-color)', borderRadius: '2px', accentColor: 'var(--accent-color)' }}
+            style={{ width: '100%', '--range-fill': `${reverb * 100}%` }}
           />
         </div>
       </div>

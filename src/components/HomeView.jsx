@@ -43,7 +43,7 @@ function QuickPlayCard({ track, index, list, onPlay, currentTrack, isAudioPlayin
     <button
       type="button"
       onClick={() => onPlay(track, index, list)}
-      className="glass animate-fade-in quick-play-btn"
+      className="glass animate-fade-in quick-play-btn card-hover"
       style={{
         display: 'flex',
         alignItems: 'center',
@@ -53,13 +53,10 @@ function QuickPlayCard({ track, index, list, onPlay, currentTrack, isAudioPlayin
         background: isCurrent ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)',
         cursor: 'pointer',
         textAlign: 'left',
-        transition: 'background 0.2s, transform 0.1s',
         height: '64px',
         overflow: 'hidden',
         position: 'relative'
       }}
-      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.15)'}
-      onMouseLeave={(e) => e.currentTarget.style.background = isCurrent ? 'rgba(255,255,255,0.15)' : 'rgba(255,255,255,0.08)'}
     >
       <div style={{ width: '64px', height: '64px', flexShrink: 0, position: 'relative', boxShadow: '2px 0 10px rgba(0,0,0,0.2)' }}>
         {track.artwork ? (
@@ -129,7 +126,7 @@ function TrackCard({
     <button
       type="button"
       onClick={() => onPlay(track, index, list)}
-      className="glass animate-fade-in"
+      className="glass animate-fade-in card-hover"
       style={{
         flex: '0 0 auto',
         width: w,
@@ -141,11 +138,8 @@ function TrackCard({
         textAlign: 'left',
         display: 'flex',
         flexDirection: 'column',
-        gap: '16px',
-        transition: 'background 0.2s',
+        gap: '16px'
       }}
-      onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255,255,255,0.12)'}
-      onMouseLeave={(e) => e.currentTarget.style.background = isCurrent ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.04)'}
     >
       <div style={{ position: 'relative', borderRadius: '8px', overflow: 'hidden', width: '100%', aspectRatio: '1 / 1', boxShadow: '0 8px 24px rgba(0,0,0,0.3)' }}>
         {track.artwork ? (

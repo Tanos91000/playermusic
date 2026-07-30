@@ -75,6 +75,35 @@ function looksLikeMetadataOrFfmpegFailure(text) {
   return /Postprocess|ffmpeg|ffprobe|Embedding|metadata|Convert|AtomicParsley/i.test(text || '');
 }
 
+/** yt-dlp trop ancien pour --progress-template : on retente sans les drapeaux de progression. */
+function looksLikeUnsupportedOption(text) {
+  return /no such option|unrecognized arguments?|Unknown option/i.test(text || '');
+}
+
+/** Préfixe unique : distingue les lignes de progression du chemin imprimé par --print. */
+const PROGRESS_LINE_PREFIX = '@@AURA_PROGRESS@@';
+
+const PROGRESS_FLAGS = {
+  newline: true,
+  progress: true,
+  progressTemplate:
+    `download:${PROGRESS_LINE_PREFIX}%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s`
+};
+
+/** `" 42.3%"|" 1.20MiB/s"|"00:12"` → objet exploitable par le renderer. */
+function parseProgressLine(line) {
+  if (typeof line !== 'string' || !line.startsWith(PROGRESS_LINE_PREFIX)) return null;
+  const [percentRaw = '', speedRaw = '', etaRaw = ''] = line
+    .slice(PROGRESS_LINE_PREFIX.length)
+    .split('|');
+  const percent = Number.parseFloat(String(percentRaw).replace('%', '').trim());
+  return {
+    percent: Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : null,
+    speed: speedRaw.trim() || null,
+    eta: etaRaw.trim() || null
+  };
+}
+
 function buildYtDlpEnv(path, processEnv = process.env) {
   const { ffmpeg, ffprobeDir } = loadBundledFfmpegPaths(path);
   if (!ffmpeg || !ffprobeDir) return { ...processEnv };
@@ -379,20 +408,34 @@ function createDownloadTrackHandler({
   const finalize =
     typeof afterYtDlDownload === 'function' ? afterYtDlDownload : finalizeDownloadedAudioAsync;
 
-  return async function downloadTrack(_event, track) {
+  return async function downloadTrack(event, track) {
     const query = getTrackQuery(track);
     const trackId = getSafeTrackId(track);
+
+    /** Progression poussée vers le renderer ; sans fenêtre (tests) on ne fait rien. */
+    const emit = (payload) => {
+      try {
+        const sender = event?.sender;
+        if (sender && !sender.isDestroyed?.()) {
+          sender.send('download-progress', { trackId: track?.id, ...payload });
+        }
+      } catch {
+        /* ignore */
+      }
+    };
 
     let downloadedPath = null;
 
     try {
       logger.log(`Starting download for: ${query}`);
+      emit({ stage: 'starting', percent: 0 });
 
       const existing = pickExistingDownload(fs, pathMod, downloadsDir, trackId, getDownloads, track);
       if (existing) {
         const downloads = getDownloads();
         downloads[track.id] = createDownloadRecord(track, existing, now);
         saveDownloads(downloads);
+        emit({ stage: 'done', percent: 100 });
         return { success: true, localPath: existing };
       }
 
@@ -415,22 +458,50 @@ function createDownloadTrackHandler({
         ]
       };
 
+      const onProgress = (progress) => {
+        emit({ stage: 'downloading', ...progress });
+      };
+
+      /**
+       * Dégradation progressive : progression + métadonnées, puis sans métadonnées
+       * (ffmpeg absent), puis sans drapeaux de progression (yt-dlp trop ancien).
+       */
+      const variants = [
+        { withProgress: true, addMetadata: true },
+        { withProgress: true, addMetadata: false },
+        { withProgress: false, addMetadata: false }
+      ];
+
       let ytResult;
-      try {
-        ytResult = await youtubeDl(`ytsearch1:${query}`, { ...commonYtFlags, addMetadata: true }, { env: ytEnv });
-      } catch (err) {
-        if (looksLikeMetadataOrFfmpegFailure(ytDlErrorText(err))) {
-          logger.warn('yt-dlp addMetadata failed, retrying without:', ytDlErrorText(err).slice(0, 400));
-          ytResult = await youtubeDl(`ytsearch1:${query}`, { ...commonYtFlags, addMetadata: false }, { env: ytEnv });
-        } else {
-          throw err;
+      let lastError = null;
+      for (let i = 0; i < variants.length; i += 1) {
+        const { withProgress, addMetadata } = variants[i];
+        const flags = {
+          ...commonYtFlags,
+          addMetadata,
+          ...(withProgress ? PROGRESS_FLAGS : {})
+        };
+        try {
+          ytResult = await youtubeDl(`ytsearch1:${query}`, flags, { env: ytEnv, onProgress });
+          lastError = null;
+          break;
+        } catch (err) {
+          lastError = err;
+          const text = ytDlErrorText(err);
+          const recoverable =
+            looksLikeMetadataOrFfmpegFailure(text) || looksLikeUnsupportedOption(text);
+          if (!recoverable || i === variants.length - 1) throw err;
+          logger.warn(`yt-dlp attempt ${i + 1} failed, retrying degraded:`, text.slice(0, 400));
         }
       }
+      if (lastError) throw lastError;
 
       downloadedPath = normalizeYtDlStdout(ytResult);
       if (!downloadedPath || !fs.existsSync(downloadedPath)) {
         throw new Error('Download finished but output file is missing');
       }
+
+      emit({ stage: 'finalizing', percent: 100 });
 
       const finalPath = await finalize({
         downloadedPath,
@@ -450,12 +521,14 @@ function createDownloadTrackHandler({
       const downloads = getDownloads();
       downloads[track.id] = createDownloadRecord(track, finalPath, now);
       saveDownloads(downloads);
+      emit({ stage: 'done', percent: 100 });
       return { success: true, localPath: finalPath };
     } catch (error) {
       if (downloadedPath && fs.existsSync(downloadedPath)) {
         try { fs.unlinkSync(downloadedPath); } catch {}
       }
       logger.error('Download error:', error);
+      emit({ stage: 'error', percent: null });
       throw error;
     }
   };
@@ -527,24 +600,48 @@ function createYoutubeDlUnpack(nodePath) {
 
   return async function youtubeDl(url, flags = {}, execOpts = {}) {
     const argv = [url, ...dargs(flags, { useEquals: false }).filter(Boolean)];
+    const { onProgress, ...spawnOpts } = execOpts;
     return new Promise((resolve, reject) => {
       const child = spawn(binPath, argv, {
         windowsHide: true,
-        ...execOpts
+        ...spawnOpts
       });
       let stdout = '';
       let stderr = '';
+      let pending = '';
+      /** Les lignes de progression sont filtrées : stdout ne doit contenir que --print. */
+      const consumeStdout = (text) => {
+        pending += text;
+        const lines = pending.split(/\r?\n/);
+        pending = lines.pop() ?? '';
+        for (const line of lines) {
+          const progress = parseProgressLine(line.trim());
+          if (progress) {
+            if (typeof onProgress === 'function') {
+              try { onProgress(progress); } catch { /* ignore */ }
+            }
+            continue;
+          }
+          stdout += `${line}\n`;
+        }
+      };
       child.stdout?.on('data', (chunk) => {
-        stdout += chunk.toString();
+        consumeStdout(chunk.toString());
       });
+      /** Vide le reste du tampon (dernière ligne sans \n) avant de résoudre. */
+      const flushStdout = () => {
+        if (pending) consumeStdout('\n');
+      };
       child.stderr?.on('data', (chunk) => {
         stderr += chunk.toString();
       });
       child.on('error', (err) => {
+        flushStdout();
         Object.assign(err, { stderr, stdout });
         reject(err);
       });
       child.on('close', (exitCode, signal) => {
+        flushStdout();
         if (exitCode === 0) {
           const raw = stdout.trim();
           if (!raw) {
@@ -580,5 +677,6 @@ module.exports = {
   resolveYtDlpBinaryPath,
   /** exported for tests */
   buildFinalBasename,
-  unpackFriendlyBinaryPath
+  unpackFriendlyBinaryPath,
+  parseProgressLine
 };

@@ -99,6 +99,10 @@ export default function JamView({
     c.publish(topicHost(sid), JSON.stringify(state), { retain: true });
   }, [username, currentTrack, isAudioPlaying, playbackPosition]);
 
+  /** L'intervalle est créé une fois : il doit lire la dernière version du publisher. */
+  const publishHostStateRef = useRef(publishHostState);
+  publishHostStateRef.current = publishHostState;
+
   // ---- Publish listener presence ----
   const publishPresence = useCallback(() => {
     const c = clientRef.current;
@@ -158,10 +162,10 @@ export default function JamView({
         mqttClient.subscribe(topicAllListeners(sid), (err) => {
           if (err) return;
           // Publish initial state
-          publishHostState();
+          publishHostStateRef.current();
           // Start periodic publish
           hostPublishTimerRef.current = setInterval(() => {
-            publishHostState();
+            publishHostStateRef.current();
           }, HOST_PUBLISH_MS);
         });
       } else {
@@ -231,7 +235,9 @@ export default function JamView({
       try { mqttClient.end(true); } catch {}
       clientRef.current = null;
     };
-  }, [sessionId, role]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Dépendances volontairement limitées : ajouter les publishers relancerait
+    // la connexion MQTT à chaque rendu (ils sont lus via des refs).
+  }, [sessionId, role]);
 
   // ---- Cleanup stale peer data ----
   useEffect(() => {

@@ -1,23 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Play, Plus, Trash2, X, Music } from 'lucide-react';
 import TrackList from './TrackList';
 
-export default function PlaylistsView({ 
-  playlists, 
-  onCreatePlaylist, 
-  onDeletePlaylist, 
-  onPlayPlaylist, 
-  currentTrack, 
-  isAudioPlaying, 
+export default function PlaylistsView({
+  playlists,
+  onCreatePlaylist,
+  onDeletePlaylist,
+  onPlayPlaylist,
   onPlayTrack,
-  favorites,
-  toggleFavorite,
-  onTrackDownloaded,
-  onRemoveFromPlaylist
+  onRemoveFromPlaylist,
+  ...trackListProps
 }) {
-  const [selectedPlaylist, setSelectedPlaylist] = useState(null);
+  /** On garde l'id (et non l'objet) pour que la vue reflète les retraits en direct. */
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState(null);
   const [newPlaylistName, setNewPlaylistName] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+
+  const selectedPlaylist = playlists.find((p) => p.id === selectedPlaylistId) || null;
 
   const handleCreate = (e) => {
     e.preventDefault();
@@ -32,58 +31,33 @@ export default function PlaylistsView({
     return (
       <div className="animate-fade-in" style={{ padding: '0 10px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginBottom: '24px' }}>
-          <button 
-            onClick={() => setSelectedPlaylist(null)}
-            style={{ 
-              background: 'rgba(255,255,255,0.1)', 
-              border: 'none', 
-              borderRadius: '50%', 
-              width: '40px', 
-              height: '40px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              color: 'var(--text-primary)'
-            }}
-          >
+          <button type="button" className="btn-icon" onClick={() => setSelectedPlaylistId(null)} title="Retour">
             <X size={20} />
           </button>
           <h2 style={{ fontSize: '1.5rem', margin: 0 }}>{selectedPlaylist.name}</h2>
           <button
-             onClick={() => onPlayPlaylist(selectedPlaylist)}
-             style={{
-               marginLeft: 'auto',
-               background: 'var(--accent-color)',
-               color: 'white',
-               border: 'none',
-               padding: '10px 20px',
-               borderRadius: '24px',
-               fontWeight: 600,
-               cursor: 'pointer',
-               display: 'flex',
-               alignItems: 'center',
-               gap: '8px'
-             }}
+            type="button"
+            className="btn-pill btn-pill--accent"
+            onClick={() => onPlayPlaylist(selectedPlaylist)}
+            disabled={selectedPlaylist.tracks.length === 0}
+            style={{ marginLeft: 'auto' }}
           >
-             <Play size={18} fill="currentColor" />
-             Tout lire
+            <Play size={18} fill="currentColor" />
+            Tout lire
           </button>
         </div>
-        
+
         {selectedPlaylist.tracks.length === 0 ? (
           <div className="flex-center" style={{ height: '30vh', color: 'var(--text-secondary)' }}>
             <p>Cette playlist est vide. Ajoute des sons depuis la recherche, tes favoris ou tes fichiers locaux.</p>
           </div>
         ) : (
-          <TrackList 
-            tracks={selectedPlaylist.tracks} 
-            onPlay={(track, index) => onPlayTrack(track, index, selectedPlaylist.tracks)} 
-            currentTrack={currentTrack}
-            isAudioPlaying={isAudioPlaying}
-            favorites={favorites}
-            toggleFavorite={toggleFavorite}
-            onTrackDownloaded={onTrackDownloaded}
+          <TrackList
+            {...trackListProps}
+            tracks={selectedPlaylist.tracks}
+            onPlay={(track, index) => onPlayTrack(track, index, selectedPlaylist.tracks, `Playlist · ${selectedPlaylist.name}`)}
+            onRemoveTrack={(track) => onRemoveFromPlaylist(selectedPlaylist.id, track.id)}
+            removeTrackLabel="Retirer de la playlist"
           />
         )}
       </div>
@@ -94,21 +68,7 @@ export default function PlaylistsView({
     <div className="animate-fade-in" style={{ padding: '0 10px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
         <h2 style={{ fontSize: '1.5rem', margin: 0 }}>Mes Playlists</h2>
-        <button 
-          onClick={() => setIsCreating(true)}
-          style={{ 
-            background: 'var(--accent-color)', 
-            color: 'white', 
-            border: 'none', 
-            padding: '8px 16px', 
-            borderRadius: '20px',
-            cursor: 'pointer',
-            fontWeight: 600,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
-          }}
-        >
+        <button type="button" className="btn-pill btn-pill--accent" onClick={() => setIsCreating(true)}>
           <Plus size={18} />
           Nouvelle
         </button>
@@ -136,11 +96,11 @@ export default function PlaylistsView({
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '16px' }}>
           {playlists.map(pl => (
-            <div 
+            <div
               key={pl.id}
-              className="glass"
-              style={{ padding: '16px', borderRadius: '16px', cursor: 'pointer', position: 'relative', transition: 'transform 0.2s', '&:hover': { transform: 'scale(1.02)' } }}
-              onClick={() => setSelectedPlaylist(pl)}
+              className="glass card-hover"
+              style={{ padding: '16px', borderRadius: '16px', cursor: 'pointer', position: 'relative' }}
+              onClick={() => setSelectedPlaylistId(pl.id)}
             >
               <div style={{ width: '100%', aspectRatio: '1', background: 'rgba(0,0,0,0.3)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '12px' }}>
                 <Music size={40} color="var(--text-secondary)" />

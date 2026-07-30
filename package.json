@@ -1,6 +1,6 @@
 {
   "name": "playermusic",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Aura Player — SoundCloud desktop player with downloads",
   "author": "TanosVape",
@@ -54,7 +54,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "TanosVape",
+        "owner": "Tanos91000",
         "repo": "playermusic"
       }
     ],

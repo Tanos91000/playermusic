@@ -7,8 +7,18 @@ const test = require('node:test');
 const {
   createDownloadTrackHandler,
   getYoutubeWatchUrl,
-  buildFinalBasename
+  buildFinalBasename,
+  parseProgressLine
 } = require('./download-track');
+
+test('parseProgressLine extracts percent, speed and eta from tagged lines', () => {
+  assert.deepEqual(
+    parseProgressLine('@@AURA_PROGRESS@@  42.3%| 1.20MiB/s|00:12'),
+    { percent: 42.3, speed: '1.20MiB/s', eta: '00:12' }
+  );
+  assert.equal(parseProgressLine('/tmp/downloads/song.m4a'), null);
+  assert.equal(parseProgressLine(''), null);
+});
 
 test('getYoutubeWatchUrl prefers a canonical watch URL from a video id', () => {
   assert.equal(

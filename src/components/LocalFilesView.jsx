@@ -3,13 +3,9 @@ import TrackList from './TrackList';
 
 export default function LocalFilesView({
   tracks,
-  currentTrack,
-  isAudioPlaying,
   onPlay,
   onImport,
-  favorites,
-  toggleFavorite,
-  onOpenArtist
+  ...trackListProps
 }) {
   return (
     <div className="animate-fade-in" style={{ paddingBottom: '40px' }}>
@@ -34,21 +30,8 @@ export default function LocalFilesView({
         <button
           type="button"
           onClick={onImport}
-          className="glass"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '10px',
-            padding: '10px 20px',
-            borderRadius: '999px',
-            border: 'none',
-            background: 'rgba(255,255,255,0.08)',
-            color: 'var(--text-primary)',
-            fontWeight: 700,
-            fontSize: '0.9rem',
-            cursor: 'pointer',
-            WebkitAppRegion: 'no-drag'
-          }}
+          className="glass btn-pill"
+          style={{ WebkitAppRegion: 'no-drag' }}
         >
           <FolderPlus size={20} strokeWidth={2} />
           Ajouter des fichiers
@@ -61,15 +44,7 @@ export default function LocalFilesView({
           <p style={{ margin: 0, fontSize: '0.9rem', opacity: 0.85 }}>Utilise « Ajouter des fichiers » pour construire ta liste.</p>
         </div>
       ) : (
-        <TrackList
-          tracks={tracks}
-          onPlay={onPlay}
-          currentTrack={currentTrack}
-          isAudioPlaying={isAudioPlaying}
-          favorites={favorites}
-          toggleFavorite={toggleFavorite}
-          onOpenArtist={onOpenArtist}
-        />
+        <TrackList {...trackListProps} tracks={tracks} onPlay={onPlay} />
       )}
     </div>
   );
